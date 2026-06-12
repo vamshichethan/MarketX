@@ -411,6 +411,208 @@ PLACE SELL LIMIT AAPL 100 149
 
 `ORD-2` fills before modified `ORD-1` because the modify reset `ORD-1`'s time priority.
 
+## Phase 4: OMS Microservice
+
+Phase 4 adds a Spring Boot Order Management System, or OMS, under `backend/oms-service`.
+
+An OMS is the backend service that accepts trader order requests, validates them, stores them, and routes them toward an exchange. Orders should not directly hit the exchange engine because institutions need a controlled entry point for validation, auditing, persistence, client APIs, and future routing to risk checks or messaging systems.
+
+Phase 4 still does not add Kafka, a risk engine, React, or production microservice orchestration. The OMS uses REST, PostgreSQL, Spring Data JPA, and an `ExchangeClient` interface backed by an in-memory exchange adapter.
+
+### Phase 4 Architecture
+
+```mermaid
+flowchart LR
+    Client["Client / Trader"]
+    API["OMS REST API"]
+    DB["PostgreSQL"]
+    ExchangeClient["ExchangeClient"]
+    Engine["In-Memory Matching Engine"]
+
+    Client --> API
+    API --> DB
+    API --> ExchangeClient
+    ExchangeClient --> Engine
+```
+
+### OMS API Endpoints
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| `POST` | `/orders` | Create a new order. |
+| `PUT` | `/orders/{orderId}` | Modify an active limit order. |
+| `DELETE` | `/orders/{orderId}` | Cancel an active order. |
+| `GET` | `/orders/{orderId}` | Get one order. |
+| `GET` | `/orders` | List orders with optional `symbol`, `side`, and `status` filters. |
+| `GET` | `/order-book/{symbol}` | Get top 5 bids, top 5 asks, best bid, best ask, and spread. |
+| `GET` | `/trades` | Get executed trades with optional `symbol` filter. |
+
+### Database Schema
+
+The OMS uses PostgreSQL through Spring Data JPA.
+
+`orders`
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Database primary key. |
+| `orderId` | External order ID such as `ORD-1`. |
+| `symbol` | Instrument symbol, such as `AAPL`. |
+| `side` | `BUY` or `SELL`. |
+| `type` | `MARKET` or `LIMIT`. |
+| `originalQuantity` | Quantity requested when the order was created or modified. |
+| `remainingQuantity` | Quantity still open. |
+| `price` | Limit price, or `0` for market orders. |
+| `status` | `NEW`, `PARTIALLY_FILLED`, `FILLED`, `CANCELLED`, or `REJECTED`. |
+| `createdAt` | Creation timestamp. |
+| `updatedAt` | Last update timestamp. |
+
+`trades`
+
+| Field | Meaning |
+| --- | --- |
+| `tradeId` | External trade ID such as `TRD-1`. |
+| `symbol` | Instrument symbol. |
+| `quantity` | Executed quantity. |
+| `price` | Execution price. |
+| `buyOrderId` | Buy order ID. |
+| `sellOrderId` | Sell order ID. |
+| `aggressorSide` | Incoming order side that caused the match. |
+| `executedAt` | Execution timestamp. |
+
+`execution_reports`
+
+| Field | Meaning |
+| --- | --- |
+| `executionId` | Execution report ID such as `EXE-1`. |
+| `orderId` | Related order ID. |
+| `symbol` | Instrument symbol. |
+| `side` | Order side. |
+| `status` | Order status at report time. |
+| `executedQuantity` | Quantity executed for the report event. |
+| `executedPrice` | Execution price if applicable. |
+| `remainingQuantity` | Remaining quantity after the event. |
+| `message` | Human-readable event message. |
+| `createdAt` | Report timestamp. |
+
+### How to Run PostgreSQL
+
+From the OMS service directory:
+
+```bash
+cd backend/oms-service
+docker compose up -d postgres
+```
+
+The local database config is:
+
+```text
+database: marketx_oms
+username: marketx
+password: marketx
+port: 5432
+```
+
+### How to Run the OMS
+
+From `backend/oms-service`:
+
+```bash
+mvn spring-boot:run
+```
+
+The service runs on:
+
+```text
+http://localhost:8080
+```
+
+### Sample Curl Commands
+
+Create a limit order:
+
+```bash
+curl -X POST http://localhost:8080/orders \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbol": "AAPL",
+    "side": "BUY",
+    "type": "LIMIT",
+    "quantity": 100,
+    "price": 150.0
+  }'
+```
+
+Create a market order:
+
+```bash
+curl -X POST http://localhost:8080/orders \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbol": "AAPL",
+    "side": "BUY",
+    "type": "MARKET",
+    "quantity": 50
+  }'
+```
+
+Modify an order:
+
+```bash
+curl -X PUT http://localhost:8080/orders/ORD-1 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "quantity": 200,
+    "price": 151.0
+  }'
+```
+
+Cancel an order:
+
+```bash
+curl -X DELETE http://localhost:8080/orders/ORD-1
+```
+
+Get one order:
+
+```bash
+curl http://localhost:8080/orders/ORD-1
+```
+
+List orders:
+
+```bash
+curl http://localhost:8080/orders
+curl "http://localhost:8080/orders?symbol=AAPL"
+curl "http://localhost:8080/orders?status=FILLED"
+curl "http://localhost:8080/orders?side=BUY"
+```
+
+Get the order book:
+
+```bash
+curl http://localhost:8080/order-book/AAPL
+```
+
+Get trades:
+
+```bash
+curl http://localhost:8080/trades
+curl "http://localhost:8080/trades?symbol=AAPL"
+```
+
+### Phase 4 Test Flow
+
+1. Start PostgreSQL.
+2. Start the OMS service.
+3. `POST` a `BUY LIMIT AAPL 100 @ 150`.
+4. `POST` a `SELL LIMIT AAPL 100 @ 150`.
+5. Confirm a trade appears with `GET /trades`.
+6. Check market depth with `GET /order-book/AAPL`.
+7. Check persisted orders with `GET /orders`.
+8. Modify an active order with `PUT /orders/{orderId}`.
+9. Cancel an active order with `DELETE /orders/{orderId}`.
+
 ## Documentation
 
 - [How a Trade Happens](docs/phase-0/how-a-trade-happens.md)
@@ -427,8 +629,8 @@ Future phases may include:
 | Phase 1 | Exchange simulator core engine |
 | Phase 2 | Order book engine and market depth |
 | Phase 3 | Matching engine, order state, cancel, modify, and execution reports |
-| Phase 4 | Execution reports and positions |
+| Phase 4 | OMS microservice with REST, PostgreSQL, and JPA |
 | Phase 5 | PnL calculations and market data |
 | Phase 6 | Settlement, clearing, reliability, and observability |
 
-MarketX currently contains Phase 0 documentation, the Phase 1 in-memory exchange simulator, the Phase 2 market depth order book engine, and the Phase 3 matching engine.
+MarketX currently contains Phase 0 documentation, the Phase 1 in-memory exchange simulator, the Phase 2 market depth order book engine, the Phase 3 matching engine, and the Phase 4 OMS microservice.
