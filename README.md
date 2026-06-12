@@ -457,6 +457,7 @@ The OMS uses PostgreSQL through Spring Data JPA.
 | --- | --- |
 | `id` | Database primary key. |
 | `orderId` | External order ID such as `ORD-1`. |
+| `accountId` | Account that owns the order, such as `TRADER-1`. |
 | `symbol` | Instrument symbol, such as `AAPL`. |
 | `side` | `BUY` or `SELL`. |
 | `type` | `MARKET` or `LIMIT`. |
@@ -477,6 +478,8 @@ The OMS uses PostgreSQL through Spring Data JPA.
 | `price` | Execution price. |
 | `buyOrderId` | Buy order ID. |
 | `sellOrderId` | Sell order ID. |
+| `buyAccountId` | Account that owns the buy order. |
+| `sellAccountId` | Account that owns the sell order. |
 | `aggressorSide` | Incoming order side that caused the match. |
 | `executedAt` | Execution timestamp. |
 
@@ -535,6 +538,7 @@ Create a limit order:
 curl -X POST http://localhost:8080/orders \
   -H "Content-Type: application/json" \
   -d '{
+    "accountId": "TRADER-1",
     "symbol": "AAPL",
     "side": "BUY",
     "type": "LIMIT",
@@ -549,6 +553,7 @@ Create a market order:
 curl -X POST http://localhost:8080/orders \
   -H "Content-Type: application/json" \
   -d '{
+    "accountId": "TRADER-1",
     "symbol": "AAPL",
     "side": "BUY",
     "type": "MARKET",
@@ -613,6 +618,179 @@ curl "http://localhost:8080/trades?symbol=AAPL"
 8. Modify an active order with `PUT /orders/{orderId}`.
 9. Cancel an active order with `DELETE /orders/{orderId}`.
 
+## Phase 5: Position Service
+
+Phase 5 adds a separate Spring Boot Position Service under `backend/position-service`.
+
+The Position Service tracks net holdings by `accountId + symbol` after trades execute.
+
+```text
+BUY 100 AAPL  -> +100 AAPL
+SELL 40 AAPL -> +60 AAPL
+SELL 100 AAPL -> -40 AAPL
+```
+
+A positive position is `LONG`, a negative position is `SHORT`, and zero is `FLAT`.
+
+### Phase 5 Architecture
+
+```mermaid
+flowchart LR
+    OMS["OMS / Exchange"]
+    Trade["Trade Executed"]
+    Position["Position Service REST API"]
+    DB["PostgreSQL"]
+
+    OMS --> Trade
+    Trade --> Position
+    Position --> DB
+```
+
+For now, OMS notifies Position Service by REST after new trades are stored. Later, this can move to Kafka trade events without changing the Position Service position logic.
+
+### Position Service APIs
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| `POST` | `/positions/events/trade` | Process an executed trade event. |
+| `GET` | `/positions/{accountId}/{symbol}` | Get a position for one account and symbol. |
+| `GET` | `/positions/{accountId}` | Get all positions for one account. |
+| `GET` | `/positions` | Get all positions. |
+
+### Position Database
+
+The Position Service uses a separate PostgreSQL database:
+
+```text
+marketx_positions
+```
+
+Main tables:
+
+| Table | Purpose |
+| --- | --- |
+| `positions` | Stores net quantity, average price, and position type by account and symbol. |
+| `processed_trades` | Stores processed trade IDs to prevent duplicate position updates. |
+
+### Position Service Run Commands
+
+Start PostgreSQL:
+
+```bash
+cd backend/oms-service
+docker compose up -d postgres
+```
+
+Run the Position Service:
+
+```bash
+cd backend/position-service
+mvn spring-boot:run
+```
+
+The Position Service runs on:
+
+```text
+http://localhost:8081
+```
+
+### Position Curl Examples
+
+Process a BUY trade event:
+
+```bash
+curl -X POST http://localhost:8081/positions/events/trade \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tradeId": "TRD-1-BUY",
+    "accountId": "TRADER-1",
+    "symbol": "AAPL",
+    "side": "BUY",
+    "quantity": 100,
+    "price": 150.0,
+    "executedAt": "2026-06-09T10:00:00"
+  }'
+```
+
+Expected position:
+
+```json
+{
+  "accountId": "TRADER-1",
+  "symbol": "AAPL",
+  "netQuantity": 100,
+  "averagePrice": 150.0,
+  "positionType": "LONG"
+}
+```
+
+Process a SELL trade event:
+
+```bash
+curl -X POST http://localhost:8081/positions/events/trade \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tradeId": "TRD-2-SELL",
+    "accountId": "TRADER-1",
+    "symbol": "AAPL",
+    "side": "SELL",
+    "quantity": 40,
+    "price": 155.0,
+    "executedAt": "2026-06-09T10:05:00"
+  }'
+```
+
+Expected position:
+
+```json
+{
+  "netQuantity": 60,
+  "positionType": "LONG"
+}
+```
+
+Flip long to short:
+
+```bash
+curl -X POST http://localhost:8081/positions/events/trade \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tradeId": "TRD-3-SELL",
+    "accountId": "TRADER-1",
+    "symbol": "AAPL",
+    "side": "SELL",
+    "quantity": 100,
+    "price": 160.0,
+    "executedAt": "2026-06-09T10:10:00"
+  }'
+```
+
+Expected position:
+
+```json
+{
+  "netQuantity": -40,
+  "positionType": "SHORT"
+}
+```
+
+Get a position:
+
+```bash
+curl http://localhost:8081/positions/TRADER-1/AAPL
+```
+
+### OMS Integration
+
+Phase 5 adds `accountId` to OMS order requests and responses.
+
+When OMS stores a newly executed trade, it sends two trade events to Position Service:
+
+- Buyer account receives a `BUY` event.
+- Seller account receives a `SELL` event.
+
+The event IDs are suffixed, for example `TRD-1-BUY` and `TRD-1-SELL`, so duplicate protection works per account-side event.
+
 ## Documentation
 
 - [How a Trade Happens](docs/phase-0/how-a-trade-happens.md)
@@ -630,7 +808,7 @@ Future phases may include:
 | Phase 2 | Order book engine and market depth |
 | Phase 3 | Matching engine, order state, cancel, modify, and execution reports |
 | Phase 4 | OMS microservice with REST, PostgreSQL, and JPA |
-| Phase 5 | PnL calculations and market data |
+| Phase 5 | Position Service with net long, short, and flat holdings |
 | Phase 6 | Settlement, clearing, reliability, and observability |
 
-MarketX currently contains Phase 0 documentation, the Phase 1 in-memory exchange simulator, the Phase 2 market depth order book engine, the Phase 3 matching engine, and the Phase 4 OMS microservice.
+MarketX currently contains Phase 0 documentation, the Phase 1 in-memory exchange simulator, the Phase 2 market depth order book engine, the Phase 3 matching engine, the Phase 4 OMS microservice, and the Phase 5 Position Service.

@@ -24,6 +24,7 @@ public class OrderEntity {
 
     @Column(nullable = false, unique = true)
     private String orderId;
+    private String accountId;
     private String symbol;
 
     @Enumerated(EnumType.STRING)
@@ -52,6 +53,14 @@ public class OrderEntity {
 
     public void setOrderId(String orderId) {
         this.orderId = orderId;
+    }
+
+    public String getAccountId() {
+        return accountId;
+    }
+
+    public void setAccountId(String accountId) {
+        this.accountId = accountId;
     }
 
     public String getSymbol() {

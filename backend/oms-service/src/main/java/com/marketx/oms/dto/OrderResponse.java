@@ -9,6 +9,7 @@ import java.time.LocalDateTime;
 
 public record OrderResponse(
         String orderId,
+        String accountId,
         String symbol,
         OrderSide side,
         OrderType type,

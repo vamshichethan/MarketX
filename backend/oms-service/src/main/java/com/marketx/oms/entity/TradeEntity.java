@@ -27,6 +27,8 @@ public class TradeEntity {
     private BigDecimal price;
     private String buyOrderId;
     private String sellOrderId;
+    private String buyAccountId;
+    private String sellAccountId;
 
     @Enumerated(EnumType.STRING)
     private OrderSide aggressorSide;
@@ -83,6 +85,22 @@ public class TradeEntity {
 
     public void setSellOrderId(String sellOrderId) {
         this.sellOrderId = sellOrderId;
+    }
+
+    public String getBuyAccountId() {
+        return buyAccountId;
+    }
+
+    public void setBuyAccountId(String buyAccountId) {
+        this.buyAccountId = buyAccountId;
+    }
+
+    public String getSellAccountId() {
+        return sellAccountId;
+    }
+
+    public void setSellAccountId(String sellAccountId) {
+        this.sellAccountId = sellAccountId;
     }
 
     public OrderSide getAggressorSide() {

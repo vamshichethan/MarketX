@@ -106,6 +106,7 @@ public class OrderService {
     private OrderEntity upsertOrder(OrderResponse response) {
         OrderEntity entity = orderRepository.findByOrderId(response.orderId()).orElseGet(OrderEntity::new);
         entity.setOrderId(response.orderId());
+        entity.setAccountId(response.accountId());
         entity.setSymbol(response.symbol());
         entity.setSide(response.side());
         entity.setType(response.type());
@@ -125,6 +126,7 @@ public class OrderService {
     private OrderResponse toResponse(OrderEntity entity) {
         return new OrderResponse(
                 entity.getOrderId(),
+                entity.getAccountId(),
                 entity.getSymbol(),
                 entity.getSide(),
                 entity.getType(),
@@ -139,6 +141,7 @@ public class OrderService {
 
     private CreateOrderRequest normalizeCreateRequest(CreateOrderRequest request) {
         return new CreateOrderRequest(
+                normalizeAccountId(request.accountId()),
                 request.symbol().toUpperCase(),
                 request.side(),
                 request.type(),
@@ -230,5 +233,12 @@ public class OrderService {
         report.setMessage(message);
         report.setCreatedAt(LocalDateTime.now());
         executionReportRepository.save(report);
+    }
+
+    private String normalizeAccountId(String accountId) {
+        if (accountId == null || accountId.isBlank()) {
+            return "TRADER-1";
+        }
+        return accountId.toUpperCase();
     }
 }

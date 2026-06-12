@@ -46,6 +46,7 @@ public class InMemoryExchangeClient implements ExchangeClient {
         BigDecimal price = request.type() == OrderType.MARKET ? BigDecimal.ZERO : request.price();
         ExchangeOrder order = new ExchangeOrder(
                 nextOrderId(),
+                request.accountId(),
                 symbol,
                 request.side(),
                 request.type(),
@@ -76,6 +77,7 @@ public class InMemoryExchangeClient implements ExchangeClient {
 
         ExchangeOrder modifiedOrder = new ExchangeOrder(
                 existingOrder.orderId,
+                existingOrder.accountId,
                 existingOrder.symbol,
                 existingOrder.side,
                 existingOrder.type,
@@ -193,6 +195,7 @@ public class InMemoryExchangeClient implements ExchangeClient {
     private OrderResponse toOrderResponse(ExchangeOrder order) {
         return new OrderResponse(
                 order.orderId,
+                order.accountId,
                 order.symbol,
                 order.side,
                 order.type,
@@ -319,6 +322,8 @@ public class InMemoryExchangeClient implements ExchangeClient {
                     restingPrice,
                     buyOrder.orderId,
                     sellOrder.orderId,
+                    buyOrder.accountId,
+                    sellOrder.accountId,
                     aggressorSide,
                     LocalDateTime.now()
             ));
@@ -378,6 +383,7 @@ public class InMemoryExchangeClient implements ExchangeClient {
 
     private static class ExchangeOrder {
         private final String orderId;
+        private final String accountId;
         private final String symbol;
         private final OrderSide side;
         private final OrderType type;
@@ -390,6 +396,7 @@ public class InMemoryExchangeClient implements ExchangeClient {
 
         private ExchangeOrder(
                 String orderId,
+                String accountId,
                 String symbol,
                 OrderSide side,
                 OrderType type,
@@ -398,6 +405,7 @@ public class InMemoryExchangeClient implements ExchangeClient {
                 LocalDateTime createdAt
         ) {
             this.orderId = orderId;
+            this.accountId = normalizeAccountId(accountId);
             this.symbol = symbol;
             this.side = side;
             this.type = type;
@@ -412,5 +420,12 @@ public class InMemoryExchangeClient implements ExchangeClient {
             return type == OrderType.LIMIT
                     && (status == OrderStatus.NEW || status == OrderStatus.PARTIALLY_FILLED);
         }
+    }
+
+    private static String normalizeAccountId(String accountId) {
+        if (accountId == null || accountId.isBlank()) {
+            return "TRADER-1";
+        }
+        return accountId.toUpperCase();
     }
 }

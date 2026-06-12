@@ -12,6 +12,8 @@ public record TradeResponse(
         BigDecimal price,
         String buyOrderId,
         String sellOrderId,
+        String buyAccountId,
+        String sellAccountId,
         OrderSide aggressorSide,
         LocalDateTime executedAt
 ) {

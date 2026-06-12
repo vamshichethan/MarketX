@@ -12,15 +12,25 @@ import java.util.List;
 public class TradeService {
     private final TradeRepository tradeRepository;
     private final ExchangeClient exchangeClient;
+    private final com.marketx.oms.client.PositionClient positionClient;
 
-    public TradeService(TradeRepository tradeRepository, ExchangeClient exchangeClient) {
+    public TradeService(
+            TradeRepository tradeRepository,
+            ExchangeClient exchangeClient,
+            com.marketx.oms.client.PositionClient positionClient
+    ) {
         this.tradeRepository = tradeRepository;
         this.exchangeClient = exchangeClient;
+        this.positionClient = positionClient;
     }
 
     public void syncTradesFromExchange() {
         for (TradeResponse trade : exchangeClient.getTrades(null)) {
-            tradeRepository.findByTradeId(trade.tradeId()).orElseGet(() -> tradeRepository.save(toEntity(trade)));
+            tradeRepository.findByTradeId(trade.tradeId()).orElseGet(() -> {
+                TradeEntity savedTrade = tradeRepository.save(toEntity(trade));
+                positionClient.notifyTrade(trade);
+                return savedTrade;
+            });
         }
     }
 
@@ -39,6 +49,8 @@ public class TradeService {
         entity.setPrice(response.price());
         entity.setBuyOrderId(response.buyOrderId());
         entity.setSellOrderId(response.sellOrderId());
+        entity.setBuyAccountId(response.buyAccountId());
+        entity.setSellAccountId(response.sellAccountId());
         entity.setAggressorSide(response.aggressorSide());
         entity.setExecutedAt(response.executedAt());
         return entity;
@@ -52,6 +64,8 @@ public class TradeService {
                 entity.getPrice(),
                 entity.getBuyOrderId(),
                 entity.getSellOrderId(),
+                entity.getBuyAccountId(),
+                entity.getSellAccountId(),
                 entity.getAggressorSide(),
                 entity.getExecutedAt()
         );

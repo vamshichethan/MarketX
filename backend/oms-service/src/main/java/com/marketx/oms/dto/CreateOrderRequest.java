@@ -8,6 +8,7 @@ import jakarta.validation.constraints.NotNull;
 import java.math.BigDecimal;
 
 public record CreateOrderRequest(
+        String accountId,
         @NotBlank String symbol,
         @NotNull OrderSide side,
         @NotNull OrderType type,
