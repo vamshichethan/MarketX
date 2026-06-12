@@ -27,6 +27,78 @@ This phase covers:
 - What can go wrong in a trading workflow.
 - Why banks care deeply about latency, reliability, and correctness.
 
+## Phase 1: Exchange Simulator Core Engine
+
+Phase 1 adds a command-line mini exchange simulator written in Java. It focuses only on the in-memory core exchange engine: orders, trades, an order book, price-time priority, and a CLI for placing buy and sell orders.
+
+This phase does not use Spring Boot, Kafka, PostgreSQL, Redis, Docker, React, or microservices.
+
+### How to Run the CLI
+
+Compile the Java files:
+
+```bash
+javac -d out $(find src/main/java -name "*.java")
+```
+
+Start the exchange simulator:
+
+```bash
+java -cp out com.marketx.Main
+```
+
+### Supported Commands
+
+| Command | Description |
+| --- | --- |
+| `PLACE BUY LIMIT AAPL 100 150` | Place a buy limit order for 100 shares at 150. |
+| `PLACE SELL LIMIT AAPL 100 150` | Place a sell limit order for 100 shares at 150. |
+| `PLACE BUY MARKET AAPL 50` | Place a buy market order for 50 shares. |
+| `PLACE SELL MARKET AAPL 50` | Place a sell market order for 50 shares. |
+| `BOOK AAPL` | Show the current order book for AAPL. |
+| `TRADES` | Show all executed trades. |
+| `HELP` | Show available commands. |
+| `EXIT` | Stop the CLI. |
+
+### Example Session
+
+```text
+MarketX Exchange Simulator
+Type HELP to see available commands.
+
+> PLACE BUY LIMIT AAPL 100 150
+ORDER ACCEPTED: BUY LIMIT AAPL 100 @ 150
+
+> PLACE SELL LIMIT AAPL 100 150
+ORDER ACCEPTED: SELL LIMIT AAPL 100 @ 150
+TRADE EXECUTED: AAPL 100 @ 150
+
+> TRADES
+TradeId | Symbol | Qty | Price | BuyOrderId | SellOrderId | Time
+1       | AAPL   | 100 | 150   | 1          | 2           | 2026-06-12T10:30:00
+```
+
+### Price-Time Priority
+
+The order book chooses which orders trade first using price-time priority.
+
+For buy orders:
+
+- Higher prices have priority.
+- If two buy orders have the same price, the earlier order has priority.
+
+For sell orders:
+
+- Lower prices have priority.
+- If two sell orders have the same price, the earlier order has priority.
+
+### Market Orders vs Limit Orders
+
+| Order Type | Meaning |
+| --- | --- |
+| Market Order | Trades immediately against available opposite-side orders. Any unfilled quantity is not stored in the book. |
+| Limit Order | Trades only at its limit price or better. Any unfilled quantity remains in the book. |
+
 ## Documentation
 
 - [How a Trade Happens](docs/phase-0/how-a-trade-happens.md)
@@ -40,11 +112,11 @@ Future phases may include:
 
 | Phase | Focus |
 | --- | --- |
-| Phase 1 | Basic order model and OMS concepts |
+| Phase 1 | Exchange simulator core engine |
 | Phase 2 | Risk checks and validation |
 | Phase 3 | Exchange simulator and matching engine |
 | Phase 4 | Execution reports and positions |
 | Phase 5 | PnL calculations and market data |
 | Phase 6 | Settlement, clearing, reliability, and observability |
 
-No backend services are implemented in Phase 0. This repository currently focuses only on documentation and foundational learning.
+MarketX currently contains Phase 0 documentation and the Phase 1 in-memory exchange simulator.
