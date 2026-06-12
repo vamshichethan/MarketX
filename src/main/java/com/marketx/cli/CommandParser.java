@@ -19,6 +19,8 @@ public class CommandParser {
                 return parsePlaceCommand(tokens);
             case "BOOK":
                 return parseSymbolCommand(CommandType.BOOK, tokens);
+            case "DEPTH":
+                return parseSymbolCommand(CommandType.DEPTH, tokens);
             case "TRADES":
                 return tokens.length == 1
                         ? ParsedCommand.valid(CommandType.TRADES)
@@ -79,7 +81,7 @@ public class CommandParser {
 
     private ParsedCommand parseSymbolCommand(CommandType commandType, String[] tokens) {
         if (tokens.length != 2) {
-            return ParsedCommand.invalid("BOOK command format: BOOK AAPL");
+            return ParsedCommand.invalid(commandType + " command format: " + commandType + " AAPL");
         }
 
         return ParsedCommand.symbol(commandType, tokens[1].toUpperCase());
@@ -114,6 +116,7 @@ public class CommandParser {
     public enum CommandType {
         PLACE,
         BOOK,
+        DEPTH,
         TRADES,
         HELP,
         EXIT,

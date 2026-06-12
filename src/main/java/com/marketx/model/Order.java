@@ -8,7 +8,8 @@ public class Order {
     private final OrderSide side;
     private final OrderType orderType;
     private final String symbol;
-    private int quantity;
+    private final int originalQuantity;
+    private int remainingQuantity;
     private final BigDecimal price;
     private final LocalDateTime timestamp;
 
@@ -25,7 +26,8 @@ public class Order {
         this.side = side;
         this.orderType = orderType;
         this.symbol = symbol;
-        this.quantity = quantity;
+        this.originalQuantity = quantity;
+        this.remainingQuantity = quantity;
         this.price = price;
         this.timestamp = timestamp;
     }
@@ -47,7 +49,15 @@ public class Order {
     }
 
     public int getQuantity() {
-        return quantity;
+        return remainingQuantity;
+    }
+
+    public int getOriginalQuantity() {
+        return originalQuantity;
+    }
+
+    public int getRemainingQuantity() {
+        return remainingQuantity;
     }
 
     public BigDecimal getPrice() {
@@ -59,14 +69,14 @@ public class Order {
     }
 
     public void reduceQuantity(int executedQuantity) {
-        if (executedQuantity < 0 || executedQuantity > quantity) {
+        if (executedQuantity < 0 || executedQuantity > remainingQuantity) {
             throw new IllegalArgumentException("Executed quantity must be between 0 and remaining order quantity.");
         }
 
-        quantity -= executedQuantity;
+        remainingQuantity -= executedQuantity;
     }
 
     public boolean isFilled() {
-        return quantity == 0;
+        return remainingQuantity == 0;
     }
 }

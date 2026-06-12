@@ -55,7 +55,8 @@ java -cp out com.marketx.Main
 | `PLACE SELL LIMIT AAPL 100 150` | Place a sell limit order for 100 shares at 150. |
 | `PLACE BUY MARKET AAPL 50` | Place a buy market order for 50 shares. |
 | `PLACE SELL MARKET AAPL 50` | Place a sell market order for 50 shares. |
-| `BOOK AAPL` | Show the current order book for AAPL. |
+| `BOOK AAPL` | Show top 5 bids, top 5 asks, best bid, best ask, and spread. |
+| `DEPTH AAPL` | Same as `BOOK AAPL`. |
 | `TRADES` | Show all executed trades. |
 | `HELP` | Show available commands. |
 | `EXIT` | Stop the CLI. |
@@ -69,9 +70,37 @@ Type HELP to see available commands.
 > PLACE BUY LIMIT AAPL 100 150
 ORDER ACCEPTED: BUY LIMIT AAPL 100 @ 150
 
+ORDER BOOK: AAPL
+
+BIDS:
+Price      Quantity
+150.00     100
+
+ASKS:
+Price      Quantity
+EMPTY
+
+BEST BID: 150.00
+BEST ASK: N/A
+SPREAD: N/A
+
 > PLACE SELL LIMIT AAPL 100 150
 ORDER ACCEPTED: SELL LIMIT AAPL 100 @ 150
 TRADE EXECUTED: AAPL 100 @ 150
+
+ORDER BOOK: AAPL
+
+BIDS:
+Price      Quantity
+EMPTY
+
+ASKS:
+Price      Quantity
+EMPTY
+
+BEST BID: N/A
+BEST ASK: N/A
+SPREAD: N/A
 
 > TRADES
 TradeId | Symbol | Qty | Price | BuyOrderId | SellOrderId | Time
@@ -99,6 +128,127 @@ For sell orders:
 | Market Order | Trades immediately against available opposite-side orders. Any unfilled quantity is not stored in the book. |
 | Limit Order | Trades only at its limit price or better. Any unfilled quantity remains in the book. |
 
+## Phase 2: Order Book Engine
+
+Phase 2 improves the exchange simulator with a clearer real-time market depth view.
+
+Market depth means the visible buy and sell liquidity available at different price levels. Instead of showing every individual order, the CLI now aggregates all remaining quantity at the same price.
+
+Example:
+
+```text
+BIDS:
+Price      Quantity
+150.00     300
+149.00     300
+
+ASKS:
+Price      Quantity
+151.00     100
+152.00     200
+```
+
+If two buy orders are waiting at `150.00`, one for `100` shares and one for `200` shares, the book shows one price level:
+
+```text
+150.00     300
+```
+
+### Top 5 Bids and Asks
+
+The `BOOK AAPL` and `DEPTH AAPL` commands show only the top 5 levels on each side:
+
+- Top 5 bids are the highest buy prices currently waiting.
+- Top 5 asks are the lowest sell prices currently waiting.
+
+This is how traders often look at the most important part of the order book without reading every order in the market.
+
+### Best Bid, Best Ask, and Spread
+
+| Term | Meaning |
+| --- | --- |
+| Best Bid | The highest price buyers are currently willing to pay. |
+| Best Ask | The lowest price sellers are currently willing to accept. |
+| Spread | `Best Ask - Best Bid`. If either side is empty, the spread is `N/A`. |
+
+### Why TreeMap Replaced PriorityQueue for Depth
+
+Phase 1 used `PriorityQueue`, which is good for finding the single best order to match next. However, it is not ideal for printing a full sorted depth view because it does not expose all levels in clean sorted order without copying and sorting.
+
+Phase 2 uses `TreeMap`:
+
+- Buy levels use reverse order, so the highest price is first.
+- Sell levels use natural order, so the lowest price is first.
+- Each price level stores a FIFO `Queue<Order>`.
+- The queue preserves time priority for orders at the same price.
+
+This gives both correct matching and clean market depth display:
+
+```text
+BUY side:
+150.00 -> [order1, order2]
+149.00 -> [order3]
+
+SELL side:
+151.00 -> [order4]
+152.00 -> [order5]
+```
+
+### Phase 2 Sample Session
+
+```text
+> PLACE BUY LIMIT AAPL 100 150
+ORDER ACCEPTED: BUY LIMIT AAPL 100 @ 150
+
+ORDER BOOK: AAPL
+
+BIDS:
+Price      Quantity
+150.00     100
+
+ASKS:
+Price      Quantity
+EMPTY
+
+BEST BID: 150.00
+BEST ASK: N/A
+SPREAD: N/A
+
+> PLACE BUY LIMIT AAPL 200 150
+ORDER ACCEPTED: BUY LIMIT AAPL 200 @ 150
+
+ORDER BOOK: AAPL
+
+BIDS:
+Price      Quantity
+150.00     300
+
+ASKS:
+Price      Quantity
+EMPTY
+
+BEST BID: 150.00
+BEST ASK: N/A
+SPREAD: N/A
+
+> PLACE SELL LIMIT AAPL 100 151
+ORDER ACCEPTED: SELL LIMIT AAPL 100 @ 151
+
+ORDER BOOK: AAPL
+
+BIDS:
+Price      Quantity
+150.00     300
+
+ASKS:
+Price      Quantity
+151.00     100
+
+BEST BID: 150.00
+BEST ASK: 151.00
+SPREAD: 1.00
+```
+
 ## Documentation
 
 - [How a Trade Happens](docs/phase-0/how-a-trade-happens.md)
@@ -113,10 +263,10 @@ Future phases may include:
 | Phase | Focus |
 | --- | --- |
 | Phase 1 | Exchange simulator core engine |
-| Phase 2 | Risk checks and validation |
+| Phase 2 | Order book engine and market depth |
 | Phase 3 | Exchange simulator and matching engine |
 | Phase 4 | Execution reports and positions |
 | Phase 5 | PnL calculations and market data |
 | Phase 6 | Settlement, clearing, reliability, and observability |
 
-MarketX currently contains Phase 0 documentation and the Phase 1 in-memory exchange simulator.
+MarketX currently contains Phase 0 documentation, the Phase 1 in-memory exchange simulator, and the Phase 2 market depth order book engine.
