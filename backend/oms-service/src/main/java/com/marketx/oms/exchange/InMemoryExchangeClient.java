@@ -40,12 +40,17 @@ public class InMemoryExchangeClient implements ExchangeClient {
 
     @Override
     public synchronized OrderResponse placeOrder(CreateOrderRequest request) {
+        return placeOrder(nextOrderId(), request);
+    }
+
+    @Override
+    public synchronized OrderResponse placeOrder(String orderId, CreateOrderRequest request) {
         validateCreate(request);
 
         String symbol = request.symbol().toUpperCase();
         BigDecimal price = request.type() == OrderType.MARKET ? BigDecimal.ZERO : request.price();
         ExchangeOrder order = new ExchangeOrder(
-                nextOrderId(),
+                orderId,
                 request.accountId(),
                 symbol,
                 request.side(),
@@ -205,7 +210,8 @@ public class InMemoryExchangeClient implements ExchangeClient {
                 order.status,
                 order.createdAt,
                 order.updatedAt,
-                List.of()
+                List.of(),
+                "Order accepted by exchange"
         );
     }
 

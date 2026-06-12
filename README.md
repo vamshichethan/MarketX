@@ -646,7 +646,7 @@ flowchart LR
     Position --> DB
 ```
 
-For now, OMS notifies Position Service by REST after new trades are stored. Later, this can move to Kafka trade events without changing the Position Service position logic.
+In Phase 8, Position Service consumes `TradeExecutedEvent` messages from Kafka. The REST endpoint remains available for manual testing.
 
 ### Position Service APIs
 
@@ -819,7 +819,7 @@ flowchart LR
     PnL --> DB
 ```
 
-For now, OMS notifies PnL Service by REST after new trades are stored. Market price updates are sent manually through REST. Later, trade events and market data can move to Kafka.
+In Phase 8, PnL Service consumes `TradeExecutedEvent` and `MarketPriceEvent` messages from Kafka. REST endpoints remain available for manual testing.
 
 ### PnL Formulas
 
@@ -961,12 +961,9 @@ curl http://localhost:8082/pnl/TRADER-1/AAPL
 
 ### OMS Integration
 
-Phase 6 adds an OMS `PnlClient`.
+In Phase 8, OMS publishes newly executed trades to Kafka topic `trades.executed`.
 
-When OMS stores a newly executed trade, it now sends trade events to:
-
-- Position Service
-- PnL Service
+Position Service and PnL Service both consume the same `TradeExecutedEvent`.
 
 For each trade:
 
@@ -1121,12 +1118,106 @@ POST /orders
 
 If Risk Service is unavailable, OMS rejects the order safely and does not send it to the exchange.
 
+## Phase 8 - Kafka Event Bus
+
+Phase 8 adds Kafka as the event bus for MarketX.
+
+The platform now supports an asynchronous order flow:
+
+```mermaid
+flowchart LR
+    Trader --> OMS["OMS"]
+    OMS --> Submitted["Kafka: orders.submitted"]
+    Submitted --> Risk["Risk Service"]
+    Risk --> Approved["Kafka: orders.risk.approved"]
+    Risk --> Rejected["Kafka: orders.risk.rejected"]
+    Approved --> OMS
+    Rejected --> OMS
+    OMS --> Exchange["Exchange Engine"]
+    Exchange --> Trades["Kafka: trades.executed"]
+    Trades --> Position["Position Service"]
+    Trades --> PnL["PnL Service"]
+
+    Publisher["Market Data Publisher"] --> Prices["Kafka: market.prices"]
+    Prices --> Risk
+    Prices --> PnL
+```
+
+REST APIs remain available for manual testing, but new orders no longer synchronously call Risk Service from `POST /orders`.
+
+The new order behavior is:
+
+```text
+POST /orders
+  -> OMS saves order as PENDING_RISK
+  -> OMS publishes OrderSubmittedEvent
+  -> Risk Service consumes and evaluates
+  -> Risk publishes approved or rejected event
+  -> OMS consumes the risk result
+  -> Approved orders route to the embedded exchange
+  -> Executed trades publish TradeExecutedEvent
+```
+
+### Kafka Topics
+
+| Topic | Produced By | Consumed By |
+| --- | --- | --- |
+| `orders.submitted` | OMS | Risk Service |
+| `orders.risk.approved` | Risk Service | OMS |
+| `orders.risk.rejected` | Risk Service | OMS |
+| `trades.executed` | OMS embedded exchange adapter | OMS, Position Service, PnL Service |
+| `market.prices` | PnL market price publisher | Risk Service, PnL Service |
+
+### Shared Event Contracts
+
+Shared event records live in:
+
+```text
+backend/common-events
+```
+
+Events include:
+
+- `OrderSubmittedEvent`
+- `OrderRiskApprovedEvent`
+- `OrderRiskRejectedEvent`
+- `TradeExecutedEvent`
+- `MarketPriceEvent`
+
+### Start Kafka
+
+From the repository root:
+
+```bash
+docker compose up -d
+```
+
+This starts PostgreSQL and Kafka, then creates:
+
+```text
+orders.submitted
+orders.risk.approved
+orders.risk.rejected
+trades.executed
+market.prices
+```
+
+Install shared event contracts before running services:
+
+```bash
+cd backend/common-events
+mvn install
+```
+
+Full Phase 8 notes are in [Phase 8 Kafka Event Bus](docs/phase-8-kafka-event-bus.md).
+
 ## Documentation
 
 - [How a Trade Happens](docs/phase-0/how-a-trade-happens.md)
 - [Glossary](docs/phase-0/glossary.md)
 - [Trade Flow Diagram](docs/phase-0/diagrams/trade-flow.md)
 - [Order Book Example](docs/phase-0/diagrams/order-book-example.md)
+- [Phase 8 Kafka Event Bus](docs/phase-8-kafka-event-bus.md)
 
 ## Future Phases
 
@@ -1141,5 +1232,6 @@ Future phases may include:
 | Phase 5 | Position Service with net long, short, and flat holdings |
 | Phase 6 | PnL Engine with realized, unrealized, and total PnL |
 | Phase 7 | Risk Engine with pre-trade checks and OMS risk gating |
+| Phase 8 | Kafka Event Bus with asynchronous order, risk, trade, and market price events |
 
-MarketX currently contains Phase 0 documentation, the Phase 1 in-memory exchange simulator, the Phase 2 market depth order book engine, the Phase 3 matching engine, the Phase 4 OMS microservice, the Phase 5 Position Service, the Phase 6 PnL Engine, and the Phase 7 Risk Engine.
+MarketX currently contains Phase 0 documentation, the Phase 1 in-memory exchange simulator, the Phase 2 market depth order book engine, the Phase 3 matching engine, the Phase 4 OMS microservice, the Phase 5 Position Service, the Phase 6 PnL Engine, the Phase 7 Risk Engine, and the Phase 8 Kafka Event Bus.

@@ -8,6 +8,7 @@ import java.time.LocalDateTime;
 
 public record MarketPriceUpdateRequest(
         @NotBlank String symbol,
+        @NotNull
         BigDecimal price,
         @NotNull LocalDateTime timestamp
 ) {

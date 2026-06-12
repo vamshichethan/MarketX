@@ -20,6 +20,7 @@ public record OrderResponse(
         OrderStatus status,
         LocalDateTime createdAt,
         LocalDateTime updatedAt,
-        List<String> rejectionReasons
+        List<String> rejectionReasons,
+        String message
 ) {
 }

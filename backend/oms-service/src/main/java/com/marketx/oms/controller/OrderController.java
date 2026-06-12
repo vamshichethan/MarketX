@@ -36,7 +36,7 @@ public class OrderController {
         if (response.status() == OrderStatus.REJECTED) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(response);
         }
-        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
     }
 
     @PutMapping("/{orderId}")

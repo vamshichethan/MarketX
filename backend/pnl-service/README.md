@@ -82,7 +82,35 @@ flowchart LR
     PnL --> DB
 ```
 
-For Phase 6, OMS notifies PnL Service by REST. Later, trade events and market data can move to Kafka.
+For Phase 8, PnL Service consumes Kafka trade events and market price events. REST endpoints remain available for manual testing.
+
+## Kafka
+
+| Direction | Topic | Event |
+| --- | --- | --- |
+| Consumes | `trades.executed` | `TradeExecutedEvent` |
+| Consumes | `market.prices` | `MarketPriceEvent` |
+| Produces | `market.prices` | `MarketPriceEvent` |
+
+Consumer group:
+
+```text
+pnl-service-group
+```
+
+Processed Kafka event IDs are stored in `processed_events`.
+
+Manual market price publisher:
+
+```bash
+curl -X POST http://localhost:8082/market-prices/publish \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbol": "AAPL",
+    "price": 105.0,
+    "timestamp": "2026-06-09T10:01:00"
+  }'
+```
 
 ## Run
 

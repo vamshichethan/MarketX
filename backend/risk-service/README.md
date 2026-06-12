@@ -172,6 +172,25 @@ POST /orders
 
 If Risk Service is unavailable, OMS rejects the order safely instead of sending it to the exchange.
 
+## Kafka
+
+In Phase 8, Risk Service also supports Kafka-based pre-trade checks.
+
+| Direction | Topic | Event |
+| --- | --- | --- |
+| Consumes | `orders.submitted` | `OrderSubmittedEvent` |
+| Produces | `orders.risk.approved` | `OrderRiskApprovedEvent` |
+| Produces | `orders.risk.rejected` | `OrderRiskRejectedEvent` |
+| Consumes | `market.prices` | `MarketPriceEvent` |
+
+Consumer group:
+
+```text
+risk-service-group
+```
+
+REST endpoints remain available for manual testing. Processed Kafka event IDs are stored in `processed_events`.
+
 ## Future Kafka Migration
 
 This phase uses REST so the services stay easy to run locally. In a later phase, risk decisions, position updates, PnL updates, and market prices can move to Kafka events without changing the core risk logic.

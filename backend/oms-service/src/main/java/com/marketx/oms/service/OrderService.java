@@ -1,5 +1,8 @@
 package com.marketx.oms.service;
 
+import com.marketx.common.events.OrderRiskApprovedEvent;
+import com.marketx.common.events.OrderRiskRejectedEvent;
+import com.marketx.common.events.OrderSubmittedEvent;
 import com.marketx.oms.client.RiskClient;
 import com.marketx.oms.dto.CancelOrderResponse;
 import com.marketx.oms.dto.CreateOrderRequest;
@@ -15,6 +18,7 @@ import com.marketx.oms.exception.InvalidOrderException;
 import com.marketx.oms.exception.InvalidOrderStateException;
 import com.marketx.oms.exception.OrderNotFoundException;
 import com.marketx.oms.exchange.ExchangeClient;
+import com.marketx.oms.kafka.OrderEventPublisher;
 import com.marketx.oms.repository.ExecutionReportRepository;
 import com.marketx.oms.repository.OrderRepository;
 import org.springframework.stereotype.Service;
@@ -24,49 +28,43 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 
 @Service
 public class OrderService {
     private final AtomicLong nextExecutionSequence = new AtomicLong(1);
-    private final AtomicLong nextRejectedOrderSequence = new AtomicLong(1);
+    private final AtomicLong nextOrderSequence = new AtomicLong(1);
     private final OrderRepository orderRepository;
     private final ExecutionReportRepository executionReportRepository;
     private final ExchangeClient exchangeClient;
     private final TradeService tradeService;
     private final RiskClient riskClient;
+    private final OrderEventPublisher orderEventPublisher;
 
     public OrderService(
             OrderRepository orderRepository,
             ExecutionReportRepository executionReportRepository,
             ExchangeClient exchangeClient,
             TradeService tradeService,
-            RiskClient riskClient
+            RiskClient riskClient,
+            OrderEventPublisher orderEventPublisher
     ) {
         this.orderRepository = orderRepository;
         this.executionReportRepository = executionReportRepository;
         this.exchangeClient = exchangeClient;
         this.tradeService = tradeService;
         this.riskClient = riskClient;
+        this.orderEventPublisher = orderEventPublisher;
     }
 
-    @Transactional
     public OrderResponse createOrder(CreateOrderRequest request) {
         validateCreateOrder(request);
         CreateOrderRequest normalizedRequest = normalizeCreateRequest(request);
-        RiskEvaluationResponse riskResponse = riskClient.evaluate(normalizedRequest);
-        if (!riskResponse.approved()) {
-            OrderEntity rejectedOrder = saveRejectedOrder(normalizedRequest, riskResponse.reasons());
-            addExecutionReport(rejectedOrder, 0, BigDecimal.ZERO, "Order rejected by Risk Service: "
-                    + String.join("; ", riskResponse.reasons()));
-            return toResponse(rejectedOrder);
-        }
-
-        OrderResponse exchangeResponse = exchangeClient.placeOrder(normalizedRequest);
-        OrderEntity savedOrder = upsertOrder(exchangeResponse);
-        addExecutionReport(savedOrder, 0, BigDecimal.ZERO, "Order accepted by OMS");
-        syncExchangeState();
-        return getOrder(savedOrder.getOrderId());
+        OrderEntity pendingOrder = savePendingRiskOrder(normalizedRequest);
+        addExecutionReport(pendingOrder, 0, BigDecimal.ZERO, "Order submitted for risk evaluation");
+        orderEventPublisher.publishOrderSubmitted(toOrderSubmittedEvent(pendingOrder));
+        return toResponse(pendingOrder, "Order submitted for risk evaluation");
     }
 
     @Transactional
@@ -98,6 +96,14 @@ public class OrderService {
     @Transactional
     public CancelOrderResponse cancelOrder(String orderId) {
         OrderEntity order = findOrder(orderId);
+        if (order.getStatus() == OrderStatus.PENDING_RISK) {
+            order.setStatus(OrderStatus.CANCELLED);
+            order.setUpdatedAt(LocalDateTime.now());
+            orderRepository.save(order);
+            addExecutionReport(order, 0, BigDecimal.ZERO, "Pending risk order cancelled by OMS");
+            return new CancelOrderResponse(order.getOrderId(), order.getStatus(), "Order cancelled successfully");
+        }
+
         validateCancel(order);
 
         CancelOrderResponse response = exchangeClient.cancelOrder(orderId);
@@ -155,6 +161,10 @@ public class OrderService {
     }
 
     private OrderResponse toResponse(OrderEntity entity) {
+        return toResponse(entity, defaultMessage(entity));
+    }
+
+    private OrderResponse toResponse(OrderEntity entity, String message) {
         return new OrderResponse(
                 entity.getOrderId(),
                 entity.getAccountId(),
@@ -167,14 +177,15 @@ public class OrderService {
                 entity.getStatus(),
                 entity.getCreatedAt(),
                 entity.getUpdatedAt(),
-                parseRejectionReasons(entity.getRejectionReasons())
+                parseRejectionReasons(entity.getRejectionReasons()),
+                message
         );
     }
 
-    private OrderEntity saveRejectedOrder(CreateOrderRequest request, List<String> reasons) {
+    private OrderEntity savePendingRiskOrder(CreateOrderRequest request) {
         LocalDateTime now = LocalDateTime.now();
         OrderEntity order = new OrderEntity();
-        order.setOrderId(nextRejectedOrderId());
+        order.setOrderId(nextOrderId());
         order.setAccountId(request.accountId());
         order.setSymbol(request.symbol());
         order.setSide(request.side());
@@ -182,15 +193,73 @@ public class OrderService {
         order.setOriginalQuantity(request.quantity());
         order.setRemainingQuantity(request.quantity());
         order.setPrice(request.type() == OrderType.MARKET ? BigDecimal.ZERO : request.price());
-        order.setStatus(OrderStatus.REJECTED);
-        order.setRejectionReasons(String.join("; ", reasons));
+        order.setStatus(OrderStatus.PENDING_RISK);
+        order.setRejectionReasons("");
         order.setCreatedAt(now);
         order.setUpdatedAt(now);
         return orderRepository.save(order);
     }
 
-    private String nextRejectedOrderId() {
-        return "REJ-ORD-" + System.currentTimeMillis() + "-" + nextRejectedOrderSequence.getAndIncrement();
+    @Transactional
+    public void handleRiskApproved(OrderRiskApprovedEvent event) {
+        OrderEntity order = findOrder(event.orderId());
+        if (order.getStatus() != OrderStatus.PENDING_RISK) {
+            return;
+        }
+
+        order.setStatus(OrderStatus.RISK_APPROVED);
+        order.setUpdatedAt(LocalDateTime.now());
+        orderRepository.save(order);
+        addExecutionReport(order, 0, BigDecimal.ZERO, event.message());
+
+        OrderResponse exchangeResponse = exchangeClient.placeOrder(order.getOrderId(), toCreateRequest(order));
+        OrderEntity savedOrder = upsertOrder(exchangeResponse);
+        addExecutionReport(savedOrder, 0, BigDecimal.ZERO, "Order routed to exchange after risk approval");
+        syncExchangeState();
+    }
+
+    @Transactional
+    public void handleRiskRejected(OrderRiskRejectedEvent event) {
+        OrderEntity order = findOrder(event.orderId());
+        if (order.getStatus() == OrderStatus.REJECTED) {
+            return;
+        }
+
+        order.setStatus(OrderStatus.REJECTED);
+        order.setRejectionReasons(String.join("; ", event.reasons()));
+        order.setUpdatedAt(LocalDateTime.now());
+        orderRepository.save(order);
+        addExecutionReport(order, 0, BigDecimal.ZERO, "Order rejected by Risk Service: "
+                + String.join("; ", event.reasons()));
+    }
+
+    private String nextOrderId() {
+        return "ORD-" + nextOrderSequence.getAndIncrement();
+    }
+
+    private CreateOrderRequest toCreateRequest(OrderEntity order) {
+        return new CreateOrderRequest(
+                order.getAccountId(),
+                order.getSymbol(),
+                order.getSide(),
+                order.getType(),
+                order.getOriginalQuantity(),
+                order.getType() == OrderType.MARKET ? null : order.getPrice()
+        );
+    }
+
+    private OrderSubmittedEvent toOrderSubmittedEvent(OrderEntity order) {
+        return new OrderSubmittedEvent(
+                UUID.randomUUID().toString(),
+                order.getOrderId(),
+                order.getAccountId(),
+                order.getSymbol(),
+                order.getSide().name(),
+                order.getType().name(),
+                order.getOriginalQuantity(),
+                order.getType() == OrderType.MARKET ? null : order.getPrice(),
+                order.getCreatedAt()
+        );
     }
 
     private CreateOrderRequest normalizeCreateRequest(CreateOrderRequest request) {
@@ -301,5 +370,15 @@ public class OrderService {
             return List.of();
         }
         return Arrays.asList(rejectionReasons.split("; "));
+    }
+
+    private String defaultMessage(OrderEntity order) {
+        if (order.getStatus() == OrderStatus.PENDING_RISK) {
+            return "Order submitted for risk evaluation";
+        }
+        if (order.getStatus() == OrderStatus.REJECTED) {
+            return "Order rejected";
+        }
+        return "Order status: " + order.getStatus();
     }
 }

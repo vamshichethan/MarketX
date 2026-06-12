@@ -13,6 +13,8 @@ import java.util.Optional;
 public interface ExchangeClient {
     OrderResponse placeOrder(CreateOrderRequest request);
 
+    OrderResponse placeOrder(String orderId, CreateOrderRequest request);
+
     OrderResponse modifyOrder(String orderId, ModifyOrderRequest request);
 
     CancelOrderResponse cancelOrder(String orderId);

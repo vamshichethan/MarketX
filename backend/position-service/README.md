@@ -49,7 +49,21 @@ flowchart LR
     Position --> DB
 ```
 
-For Phase 5, OMS notifies the Position Service by REST. In a later phase, this can be replaced with Kafka trade events.
+For Phase 8, Position Service consumes Kafka trade events from `trades.executed`. The REST endpoint remains available for manual testing.
+
+## Kafka
+
+| Direction | Topic | Event |
+| --- | --- | --- |
+| Consumes | `trades.executed` | `TradeExecutedEvent` |
+
+Consumer group:
+
+```text
+position-service-group
+```
+
+The consumer creates one BUY update for `buyAccountId` and one SELL update for `sellAccountId`. Processed Kafka event IDs are stored in `processed_events`.
 
 ## Run
 
