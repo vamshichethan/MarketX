@@ -1,0 +1,7 @@
+package com.marketx.pnl.exception;
+
+public class DuplicateTradeException extends RuntimeException {
+    public DuplicateTradeException(String tradeId) {
+        super("Trade already processed: " + tradeId);
+    }
+}

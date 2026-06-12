@@ -791,6 +791,190 @@ When OMS stores a newly executed trade, it sends two trade events to Position Se
 
 The event IDs are suffixed, for example `TRD-1-BUY` and `TRD-1-SELL`, so duplicate protection works per account-side event.
 
+## Phase 6: PnL Engine
+
+Phase 6 adds a separate Spring Boot PnL Service under `backend/pnl-service`.
+
+The PnL Service tracks profit and loss by `accountId + symbol`.
+
+It calculates:
+
+- Realized PnL from closed or reduced positions.
+- Unrealized PnL from open positions using the latest market price.
+- Total PnL as `realizedPnl + unrealizedPnl`.
+
+### Phase 6 Architecture
+
+```mermaid
+flowchart LR
+    OMS["OMS / Exchange"]
+    Trade["Trade Executed"]
+    PnL["PnL Service"]
+    DB["PostgreSQL"]
+    Price["Market Price Update"]
+
+    OMS --> Trade
+    Trade --> PnL
+    Price --> PnL
+    PnL --> DB
+```
+
+For now, OMS notifies PnL Service by REST after new trades are stored. Market price updates are sent manually through REST. Later, trade events and market data can move to Kafka.
+
+### PnL Formulas
+
+Long unrealized PnL:
+
+```text
+(currentPrice - averagePrice) * netQuantity
+```
+
+Short unrealized PnL:
+
+```text
+(averagePrice - currentPrice) * abs(netQuantity)
+```
+
+Long realized PnL:
+
+```text
+(sellPrice - averagePrice) * closedQuantity
+```
+
+Short realized PnL:
+
+```text
+(averagePrice - buyPrice) * closedQuantity
+```
+
+Total PnL:
+
+```text
+realizedPnl + unrealizedPnl
+```
+
+### PnL APIs
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| `POST` | `/pnl/events/trade` | Process a trade event. |
+| `POST` | `/pnl/events/market-price` | Update latest market price and recalculate unrealized PnL. |
+| `GET` | `/pnl/{accountId}/{symbol}` | Get one account-symbol PnL row. |
+| `GET` | `/pnl/{accountId}` | Get all PnL rows for one account. |
+| `GET` | `/pnl` | Get all PnL rows. |
+
+### PnL Service Run Commands
+
+Start PostgreSQL:
+
+```bash
+cd backend/oms-service
+docker compose up -d postgres
+```
+
+Run the PnL Service:
+
+```bash
+cd backend/pnl-service
+mvn spring-boot:run
+```
+
+The PnL Service runs on:
+
+```text
+http://localhost:8082
+```
+
+### PnL Curl Examples
+
+Process a BUY trade:
+
+```bash
+curl -X POST http://localhost:8082/pnl/events/trade \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tradeId": "TRD-1",
+    "accountId": "TRADER-1",
+    "symbol": "AAPL",
+    "side": "BUY",
+    "quantity": 100,
+    "price": 100.0,
+    "executedAt": "2026-06-09T10:00:00"
+  }'
+```
+
+Update market price:
+
+```bash
+curl -X POST http://localhost:8082/pnl/events/market-price \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbol": "AAPL",
+    "price": 105.0,
+    "timestamp": "2026-06-09T10:01:00"
+  }'
+```
+
+Expected:
+
+```json
+{
+  "realizedPnl": 0,
+  "unrealizedPnl": 500,
+  "totalPnl": 500
+}
+```
+
+Realize part of the position:
+
+```bash
+curl -X POST http://localhost:8082/pnl/events/trade \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tradeId": "TRD-2",
+    "accountId": "TRADER-1",
+    "symbol": "AAPL",
+    "side": "SELL",
+    "quantity": 40,
+    "price": 110.0,
+    "executedAt": "2026-06-09T10:05:00"
+  }'
+```
+
+Expected if market price is still `105`:
+
+```json
+{
+  "netQuantity": 60,
+  "averagePrice": 100,
+  "realizedPnl": 400,
+  "unrealizedPnl": 300,
+  "totalPnl": 700
+}
+```
+
+Get PnL:
+
+```bash
+curl http://localhost:8082/pnl/TRADER-1/AAPL
+```
+
+### OMS Integration
+
+Phase 6 adds an OMS `PnlClient`.
+
+When OMS stores a newly executed trade, it now sends trade events to:
+
+- Position Service
+- PnL Service
+
+For each trade:
+
+- Buyer account receives a `BUY` event.
+- Seller account receives a `SELL` event.
+
+PnL event IDs use the same side suffix pattern as positions, such as `TRD-1-BUY` and `TRD-1-SELL`, so duplicate-trade protection works per account-side event.
+
 ## Documentation
 
 - [How a Trade Happens](docs/phase-0/how-a-trade-happens.md)
@@ -809,6 +993,6 @@ Future phases may include:
 | Phase 3 | Matching engine, order state, cancel, modify, and execution reports |
 | Phase 4 | OMS microservice with REST, PostgreSQL, and JPA |
 | Phase 5 | Position Service with net long, short, and flat holdings |
-| Phase 6 | Settlement, clearing, reliability, and observability |
+| Phase 6 | PnL Engine with realized, unrealized, and total PnL |
 
-MarketX currently contains Phase 0 documentation, the Phase 1 in-memory exchange simulator, the Phase 2 market depth order book engine, the Phase 3 matching engine, the Phase 4 OMS microservice, and the Phase 5 Position Service.
+MarketX currently contains Phase 0 documentation, the Phase 1 in-memory exchange simulator, the Phase 2 market depth order book engine, the Phase 3 matching engine, the Phase 4 OMS microservice, the Phase 5 Position Service, and the Phase 6 PnL Engine.

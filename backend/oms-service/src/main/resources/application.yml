@@ -14,3 +14,5 @@ server:
 marketx:
   position-service:
     url: http://localhost:8081
+  pnl-service:
+    url: http://localhost:8082

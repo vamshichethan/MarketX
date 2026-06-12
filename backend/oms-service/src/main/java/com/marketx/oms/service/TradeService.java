@@ -3,6 +3,8 @@ package com.marketx.oms.service;
 import com.marketx.oms.dto.TradeResponse;
 import com.marketx.oms.entity.TradeEntity;
 import com.marketx.oms.exchange.ExchangeClient;
+import com.marketx.oms.client.PnlClient;
+import com.marketx.oms.client.PositionClient;
 import com.marketx.oms.repository.TradeRepository;
 import org.springframework.stereotype.Service;
 
@@ -12,16 +14,19 @@ import java.util.List;
 public class TradeService {
     private final TradeRepository tradeRepository;
     private final ExchangeClient exchangeClient;
-    private final com.marketx.oms.client.PositionClient positionClient;
+    private final PositionClient positionClient;
+    private final PnlClient pnlClient;
 
     public TradeService(
             TradeRepository tradeRepository,
             ExchangeClient exchangeClient,
-            com.marketx.oms.client.PositionClient positionClient
+            PositionClient positionClient,
+            PnlClient pnlClient
     ) {
         this.tradeRepository = tradeRepository;
         this.exchangeClient = exchangeClient;
         this.positionClient = positionClient;
+        this.pnlClient = pnlClient;
     }
 
     public void syncTradesFromExchange() {
@@ -29,6 +34,7 @@ public class TradeService {
             tradeRepository.findByTradeId(trade.tradeId()).orElseGet(() -> {
                 TradeEntity savedTrade = tradeRepository.save(toEntity(trade));
                 positionClient.notifyTrade(trade);
+                pnlClient.notifyTrade(trade);
                 return savedTrade;
             });
         }
