@@ -1,9 +1,11 @@
 package com.marketx.oms.service;
 
+import com.marketx.oms.client.RiskClient;
 import com.marketx.oms.dto.CancelOrderResponse;
 import com.marketx.oms.dto.CreateOrderRequest;
 import com.marketx.oms.dto.ModifyOrderRequest;
 import com.marketx.oms.dto.OrderResponse;
+import com.marketx.oms.dto.RiskEvaluationResponse;
 import com.marketx.oms.dto.TradeResponse;
 import com.marketx.oms.entity.ExecutionReportEntity;
 import com.marketx.oms.entity.OrderEntity;
@@ -20,33 +22,47 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
 @Service
 public class OrderService {
     private final AtomicLong nextExecutionSequence = new AtomicLong(1);
+    private final AtomicLong nextRejectedOrderSequence = new AtomicLong(1);
     private final OrderRepository orderRepository;
     private final ExecutionReportRepository executionReportRepository;
     private final ExchangeClient exchangeClient;
     private final TradeService tradeService;
+    private final RiskClient riskClient;
 
     public OrderService(
             OrderRepository orderRepository,
             ExecutionReportRepository executionReportRepository,
             ExchangeClient exchangeClient,
-            TradeService tradeService
+            TradeService tradeService,
+            RiskClient riskClient
     ) {
         this.orderRepository = orderRepository;
         this.executionReportRepository = executionReportRepository;
         this.exchangeClient = exchangeClient;
         this.tradeService = tradeService;
+        this.riskClient = riskClient;
     }
 
     @Transactional
     public OrderResponse createOrder(CreateOrderRequest request) {
         validateCreateOrder(request);
-        OrderResponse exchangeResponse = exchangeClient.placeOrder(normalizeCreateRequest(request));
+        CreateOrderRequest normalizedRequest = normalizeCreateRequest(request);
+        RiskEvaluationResponse riskResponse = riskClient.evaluate(normalizedRequest);
+        if (!riskResponse.approved()) {
+            OrderEntity rejectedOrder = saveRejectedOrder(normalizedRequest, riskResponse.reasons());
+            addExecutionReport(rejectedOrder, 0, BigDecimal.ZERO, "Order rejected by Risk Service: "
+                    + String.join("; ", riskResponse.reasons()));
+            return toResponse(rejectedOrder);
+        }
+
+        OrderResponse exchangeResponse = exchangeClient.placeOrder(normalizedRequest);
         OrderEntity savedOrder = upsertOrder(exchangeResponse);
         addExecutionReport(savedOrder, 0, BigDecimal.ZERO, "Order accepted by OMS");
         syncExchangeState();
@@ -57,6 +73,20 @@ public class OrderService {
     public OrderResponse modifyOrder(String orderId, ModifyOrderRequest request) {
         OrderEntity currentOrder = findOrder(orderId);
         validateModify(currentOrder, request);
+        RiskEvaluationResponse riskResponse = riskClient.evaluate(new CreateOrderRequest(
+                currentOrder.getAccountId(),
+                currentOrder.getSymbol(),
+                currentOrder.getSide(),
+                currentOrder.getType(),
+                request.quantity(),
+                request.price()
+        ));
+        if (!riskResponse.approved()) {
+            addExecutionReport(currentOrder, 0, BigDecimal.ZERO, "Modify rejected by Risk Service: "
+                    + String.join("; ", riskResponse.reasons()));
+            throw new InvalidOrderStateException("Modify rejected by Risk Service: "
+                    + String.join("; ", riskResponse.reasons()));
+        }
 
         OrderResponse exchangeResponse = exchangeClient.modifyOrder(orderId, request);
         OrderEntity savedOrder = upsertOrder(exchangeResponse);
@@ -114,6 +144,7 @@ public class OrderService {
         entity.setRemainingQuantity(response.remainingQuantity());
         entity.setPrice(response.price());
         entity.setStatus(response.status());
+        entity.setRejectionReasons(String.join("; ", response.rejectionReasons()));
         entity.setCreatedAt(entity.getCreatedAt() == null ? response.createdAt() : entity.getCreatedAt());
         entity.setUpdatedAt(response.updatedAt());
         return orderRepository.save(entity);
@@ -135,8 +166,31 @@ public class OrderService {
                 entity.getPrice(),
                 entity.getStatus(),
                 entity.getCreatedAt(),
-                entity.getUpdatedAt()
+                entity.getUpdatedAt(),
+                parseRejectionReasons(entity.getRejectionReasons())
         );
+    }
+
+    private OrderEntity saveRejectedOrder(CreateOrderRequest request, List<String> reasons) {
+        LocalDateTime now = LocalDateTime.now();
+        OrderEntity order = new OrderEntity();
+        order.setOrderId(nextRejectedOrderId());
+        order.setAccountId(request.accountId());
+        order.setSymbol(request.symbol());
+        order.setSide(request.side());
+        order.setType(request.type());
+        order.setOriginalQuantity(request.quantity());
+        order.setRemainingQuantity(request.quantity());
+        order.setPrice(request.type() == OrderType.MARKET ? BigDecimal.ZERO : request.price());
+        order.setStatus(OrderStatus.REJECTED);
+        order.setRejectionReasons(String.join("; ", reasons));
+        order.setCreatedAt(now);
+        order.setUpdatedAt(now);
+        return orderRepository.save(order);
+    }
+
+    private String nextRejectedOrderId() {
+        return "REJ-ORD-" + System.currentTimeMillis() + "-" + nextRejectedOrderSequence.getAndIncrement();
     }
 
     private CreateOrderRequest normalizeCreateRequest(CreateOrderRequest request) {
@@ -240,5 +294,12 @@ public class OrderService {
             return "TRADER-1";
         }
         return accountId.toUpperCase();
+    }
+
+    private List<String> parseRejectionReasons(String rejectionReasons) {
+        if (rejectionReasons == null || rejectionReasons.isBlank()) {
+            return List.of();
+        }
+        return Arrays.asList(rejectionReasons.split("; "));
     }
 }

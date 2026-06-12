@@ -1,6 +1,6 @@
 spring:
   datasource:
-    url: jdbc:postgresql://localhost:5432/marketx_oms
+    url: jdbc:postgresql://localhost:5432/marketx_risk
     username: marketx
     password: marketx
   jpa:
@@ -9,12 +9,10 @@ spring:
     show-sql: true
 
 server:
-  port: 8080
+  port: 8083
 
 marketx:
   position-service:
     url: http://localhost:8081
   pnl-service:
     url: http://localhost:8082
-  risk-service:
-    url: http://localhost:8083

@@ -4,6 +4,7 @@ import com.marketx.oms.dto.CancelOrderResponse;
 import com.marketx.oms.dto.CreateOrderRequest;
 import com.marketx.oms.dto.ModifyOrderRequest;
 import com.marketx.oms.dto.OrderResponse;
+import com.marketx.oms.enums.OrderStatus;
 import com.marketx.oms.service.OrderService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -31,7 +32,11 @@ public class OrderController {
 
     @PostMapping
     public ResponseEntity<OrderResponse> createOrder(@Valid @RequestBody CreateOrderRequest request) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(orderService.createOrder(request));
+        OrderResponse response = orderService.createOrder(request);
+        if (response.status() == OrderStatus.REJECTED) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(response);
+        }
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
     @PutMapping("/{orderId}")

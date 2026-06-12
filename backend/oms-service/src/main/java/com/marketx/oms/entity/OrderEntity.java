@@ -36,6 +36,8 @@ public class OrderEntity {
     private int originalQuantity;
     private int remainingQuantity;
     private BigDecimal price;
+    @Column(length = 2000)
+    private String rejectionReasons;
 
     @Enumerated(EnumType.STRING)
     private OrderStatus status;
@@ -109,6 +111,14 @@ public class OrderEntity {
 
     public void setPrice(BigDecimal price) {
         this.price = price;
+    }
+
+    public String getRejectionReasons() {
+        return rejectionReasons;
+    }
+
+    public void setRejectionReasons(String rejectionReasons) {
+        this.rejectionReasons = rejectionReasons;
     }
 
     public OrderStatus getStatus() {

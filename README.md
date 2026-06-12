@@ -975,6 +975,152 @@ For each trade:
 
 PnL event IDs use the same side suffix pattern as positions, such as `TRD-1-BUY` and `TRD-1-SELL`, so duplicate-trade protection works per account-side event.
 
+## Phase 7 - Risk Engine
+
+Phase 7 adds a pre-trade Risk Service.
+
+The OMS no longer sends every valid order directly to the exchange. It now asks the Risk Service to approve the order first.
+
+```mermaid
+flowchart LR
+    Trader --> OMS["OMS"]
+    OMS --> Risk["Risk Service"]
+    Risk --> Position["Position Service"]
+    Risk --> PnL["PnL Service"]
+    Risk --> Exchange["Exchange / Matching Engine"]
+```
+
+### What The Risk Engine Does
+
+| Check | What it prevents |
+| --- | --- |
+| Max order quantity | Accidentally sending an order that is too large. |
+| Max position quantity | Building a position bigger than the account is allowed to hold. |
+| Exposure limit | Taking too much notional market exposure in one order. |
+| Max daily loss | Continuing to trade after account PnL has breached the loss limit. |
+
+Exposure is calculated as:
+
+```text
+quantity * price
+```
+
+For `LIMIT` orders, the order price is used. For `MARKET` orders, Risk Service uses its latest stored market price. If that market price is missing, the order is rejected because the exposure cannot be measured.
+
+### Risk APIs
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| `POST` | `/risk/evaluate` | Evaluate an order before exchange routing. |
+| `PUT` | `/risk/limits/{accountId}` | Create or update account risk limits. |
+| `GET` | `/risk/limits/{accountId}` | Get account risk limits. |
+| `GET` | `/risk/decisions/{accountId}` | Get risk decision history. |
+| `POST` | `/risk/market-price` | Store latest price for market-order exposure checks. |
+
+### Risk Service Run Commands
+
+Start PostgreSQL:
+
+```bash
+cd backend/oms-service
+docker compose up -d postgres
+```
+
+Run the Risk Service:
+
+```bash
+cd backend/risk-service
+mvn spring-boot:run
+```
+
+The Risk Service runs on:
+
+```text
+http://localhost:8083
+```
+
+### Risk Curl Examples
+
+Set risk limits:
+
+```bash
+curl -X PUT http://localhost:8083/risk/limits/TRADER-1 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "maxOrderQuantity": 10000,
+    "maxPositionQuantity": 50000,
+    "maxExposure": 1000000,
+    "maxDailyLoss": 50000
+  }'
+```
+
+Update market price:
+
+```bash
+curl -X POST http://localhost:8083/risk/market-price \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbol": "AAPL",
+    "price": 150.0,
+    "timestamp": "2026-06-09T10:00:00"
+  }'
+```
+
+Evaluate a safe order:
+
+```bash
+curl -X POST http://localhost:8083/risk/evaluate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "accountId": "TRADER-1",
+    "symbol": "AAPL",
+    "side": "BUY",
+    "type": "LIMIT",
+    "quantity": 100,
+    "price": 150.0
+  }'
+```
+
+Evaluate a dangerous order:
+
+```bash
+curl -X POST http://localhost:8083/risk/evaluate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "accountId": "TRADER-1",
+    "symbol": "AAPL",
+    "side": "BUY",
+    "type": "LIMIT",
+    "quantity": 1000000,
+    "price": 150.0
+  }'
+```
+
+Expected rejection reasons:
+
+```json
+[
+  "Order quantity exceeds max allowed quantity",
+  "Exposure limit exceeded"
+]
+```
+
+### OMS Risk Integration
+
+Phase 7 adds an OMS `RiskClient`.
+
+The new OMS order flow is:
+
+```text
+POST /orders
+  -> OMS validation
+  -> Risk Service evaluation
+  -> REJECTED order saved if risk fails
+  -> Exchange routing only if risk approves
+```
+
+If Risk Service is unavailable, OMS rejects the order safely and does not send it to the exchange.
+
 ## Documentation
 
 - [How a Trade Happens](docs/phase-0/how-a-trade-happens.md)
@@ -994,5 +1140,6 @@ Future phases may include:
 | Phase 4 | OMS microservice with REST, PostgreSQL, and JPA |
 | Phase 5 | Position Service with net long, short, and flat holdings |
 | Phase 6 | PnL Engine with realized, unrealized, and total PnL |
+| Phase 7 | Risk Engine with pre-trade checks and OMS risk gating |
 
-MarketX currently contains Phase 0 documentation, the Phase 1 in-memory exchange simulator, the Phase 2 market depth order book engine, the Phase 3 matching engine, the Phase 4 OMS microservice, the Phase 5 Position Service, and the Phase 6 PnL Engine.
+MarketX currently contains Phase 0 documentation, the Phase 1 in-memory exchange simulator, the Phase 2 market depth order book engine, the Phase 3 matching engine, the Phase 4 OMS microservice, the Phase 5 Position Service, the Phase 6 PnL Engine, and the Phase 7 Risk Engine.

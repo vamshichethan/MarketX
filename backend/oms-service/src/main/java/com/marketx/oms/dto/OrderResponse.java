@@ -6,6 +6,7 @@ import com.marketx.oms.enums.OrderType;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 
 public record OrderResponse(
         String orderId,
@@ -18,6 +19,7 @@ public record OrderResponse(
         BigDecimal price,
         OrderStatus status,
         LocalDateTime createdAt,
-        LocalDateTime updatedAt
+        LocalDateTime updatedAt,
+        List<String> rejectionReasons
 ) {
 }

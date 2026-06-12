@@ -204,7 +204,8 @@ public class InMemoryExchangeClient implements ExchangeClient {
                 order.price,
                 order.status,
                 order.createdAt,
-                order.updatedAt
+                order.updatedAt,
+                List.of()
         );
     }
 
