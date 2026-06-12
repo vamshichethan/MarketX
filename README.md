@@ -57,6 +57,10 @@ java -cp out com.marketx.Main
 | `PLACE SELL MARKET AAPL 50` | Place a sell market order for 50 shares. |
 | `BOOK AAPL` | Show top 5 bids, top 5 asks, best bid, best ask, and spread. |
 | `DEPTH AAPL` | Same as `BOOK AAPL`. |
+| `CANCEL ORD-1` | Cancel an active resting limit order. |
+| `MODIFY ORD-1 200 151` | Modify an active limit order. The order loses time priority. |
+| `ORDER ORD-1` | Show the current state of one order. |
+| `REPORTS ORD-1` | Show execution reports for one order. |
 | `TRADES` | Show all executed trades. |
 | `HELP` | Show available commands. |
 | `EXIT` | Stop the CLI. |
@@ -249,6 +253,164 @@ BEST ASK: 151.00
 SPREAD: 1.00
 ```
 
+## Phase 3: Matching Engine
+
+Phase 3 upgrades MarketX from a simple simulator into a more complete in-memory matching engine.
+
+It adds:
+
+- Order status tracking.
+- Correct price-time priority matching.
+- Resting order trade price.
+- Partial-fill handling.
+- Multiple-match handling.
+- Cancel support.
+- Modify support.
+- Order lookup.
+- Execution reports.
+- Aggressor side on trades.
+
+### Price Priority
+
+The best price always trades first.
+
+For buy orders, the highest bid has priority:
+
+```text
+151.00 before 150.00
+```
+
+For sell orders, the lowest ask has priority:
+
+```text
+149.00 before 150.00
+```
+
+### Time Priority
+
+If two orders are at the same price, the older order trades first.
+
+```text
+PLACE BUY LIMIT AAPL 100 150
+PLACE BUY LIMIT AAPL 100 150
+PLACE SELL LIMIT AAPL 150 149
+```
+
+The first buy order fills for `100` before the second buy order receives the remaining `50`.
+
+### Resting Order Price Rule
+
+Trades execute at the resting order price.
+
+If the buy order is resting first:
+
+```text
+PLACE BUY LIMIT AAPL 100 150
+PLACE SELL LIMIT AAPL 100 149
+```
+
+The trade price is `150`.
+
+If the sell order is resting first:
+
+```text
+PLACE SELL LIMIT AAPL 100 149
+PLACE BUY LIMIT AAPL 100 150
+```
+
+The trade price is `149`.
+
+### Partial Fills
+
+Orders track both original quantity and remaining quantity.
+
+```text
+PLACE BUY LIMIT AAPL 100 150
+PLACE SELL LIMIT AAPL 40 149
+```
+
+Result:
+
+- Trade executes for `40`.
+- Buy order has `60` remaining.
+- Buy order status becomes `PARTIALLY_FILLED`.
+- Sell order status becomes `FILLED`.
+
+### Cancel Orders
+
+Only active resting limit orders can be cancelled.
+
+```text
+CANCEL ORD-1
+```
+
+If the order is still active, it is removed from the order book and marked `CANCELLED`.
+
+### Modify Orders
+
+Only active limit orders can be modified.
+
+```text
+MODIFY ORD-1 200 151
+```
+
+Every modify loses time priority in this phase. The engine removes the old resting order, creates a refreshed version with the same order ID, assigns a new timestamp, and reinserts it. If the modified price crosses the opposite side, it matches immediately.
+
+### Execution Reports
+
+Execution reports describe lifecycle events for an order:
+
+- New accepted order
+- Partial fill
+- Full fill
+- Cancel
+- Modify
+- Reject
+
+Use:
+
+```text
+REPORTS ORD-1
+```
+
+### Matching Engine Design Notes
+
+MarketX keeps the engine intentionally small, but the data structures mirror real exchange concerns.
+
+| Design Choice | Why It Matters |
+| --- | --- |
+| `TreeMap` price levels | Gives efficient access to the best bid or best ask without scanning the whole book. |
+| `Queue<Order>` per price | Preserves time priority for orders at the same price. |
+| `orderMap` | Allows fast lookup for cancel, modify, order status, and execution reports. |
+| Market orders not stored | Market orders are meant to execute immediately; any unfilled quantity is cancelled instead of resting. |
+| Aggregated levels | The book can display market depth without printing every individual order. |
+
+The matching loop only looks at the best opposite price level. This avoids unnecessary scanning and keeps the core logic closer to low-latency exchange design.
+
+### Phase 3 Sample Commands
+
+```text
+PLACE BUY LIMIT AAPL 100 150
+PLACE BUY LIMIT AAPL 100 150
+PLACE SELL LIMIT AAPL 150 149
+ORDER ORD-1
+ORDER ORD-2
+TRADES
+REPORTS ORD-1
+BOOK AAPL
+```
+
+Modify losing priority:
+
+```text
+PLACE BUY LIMIT AAPL 100 150
+PLACE BUY LIMIT AAPL 100 150
+MODIFY ORD-1 100 150
+PLACE SELL LIMIT AAPL 100 149
+```
+
+`ORD-2` fills before modified `ORD-1` because the modify reset `ORD-1`'s time priority.
+
 ## Documentation
 
 - [How a Trade Happens](docs/phase-0/how-a-trade-happens.md)
@@ -264,9 +426,9 @@ Future phases may include:
 | --- | --- |
 | Phase 1 | Exchange simulator core engine |
 | Phase 2 | Order book engine and market depth |
-| Phase 3 | Exchange simulator and matching engine |
+| Phase 3 | Matching engine, order state, cancel, modify, and execution reports |
 | Phase 4 | Execution reports and positions |
 | Phase 5 | PnL calculations and market data |
 | Phase 6 | Settlement, clearing, reliability, and observability |
 
-MarketX currently contains Phase 0 documentation, the Phase 1 in-memory exchange simulator, and the Phase 2 market depth order book engine.
+MarketX currently contains Phase 0 documentation, the Phase 1 in-memory exchange simulator, the Phase 2 market depth order book engine, and the Phase 3 matching engine.

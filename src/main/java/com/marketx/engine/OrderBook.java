@@ -2,6 +2,7 @@ package com.marketx.engine;
 
 import com.marketx.model.Order;
 import com.marketx.model.OrderSide;
+import com.marketx.model.OrderStatus;
 import com.marketx.model.OrderType;
 import com.marketx.model.Trade;
 
@@ -13,7 +14,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
-import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 import java.util.TreeMap;
 
 public class OrderBook {
@@ -27,7 +28,7 @@ public class OrderBook {
         this.sellLevels = new TreeMap<>();
     }
 
-    public MatchResult placeOrder(Order incomingOrder, LongSupplier tradeIdSupplier) {
+    public MatchResult placeOrder(Order incomingOrder, Supplier<String> tradeIdSupplier) {
         List<Trade> executedTrades = new ArrayList<>();
 
         if (incomingOrder.getSide() == OrderSide.BUY) {
@@ -39,6 +40,22 @@ public class OrderBook {
         }
 
         return new MatchResult(executedTrades, incomingOrder.getRemainingQuantity());
+    }
+
+    public boolean removeOrder(Order order) {
+        TreeMap<BigDecimal, Queue<Order>> levels = order.getSide() == OrderSide.BUY ? buyLevels : sellLevels;
+        Queue<Order> ordersAtPrice = levels.get(order.getPrice());
+
+        if (ordersAtPrice == null) {
+            return false;
+        }
+
+        boolean removed = ordersAtPrice.remove(order);
+        if (ordersAtPrice.isEmpty()) {
+            levels.remove(order.getPrice());
+        }
+
+        return removed;
     }
 
     public List<OrderBookLevel> getTopBuyLevels(int maxLevels) {
@@ -72,7 +89,7 @@ public class OrderBook {
         return symbol;
     }
 
-    private void matchBuyOrder(Order buyOrder, LongSupplier tradeIdSupplier, List<Trade> executedTrades) {
+    private void matchBuyOrder(Order buyOrder, Supplier<String> tradeIdSupplier, List<Trade> executedTrades) {
         // Sell levels are sorted lowest price first, so firstEntry is the best ask.
         while (!buyOrder.isFilled() && !sellLevels.isEmpty()) {
             Map.Entry<BigDecimal, Queue<Order>> bestAskLevel = sellLevels.firstEntry();
@@ -83,11 +100,11 @@ public class OrderBook {
             }
 
             Queue<Order> sellOrdersAtBestPrice = bestAskLevel.getValue();
-            Order bestSellOrder = sellOrdersAtBestPrice.peek();
+            Order restingSellOrder = sellOrdersAtBestPrice.peek();
 
-            executeTrade(buyOrder, bestSellOrder, bestAskPrice, tradeIdSupplier, executedTrades);
+            executeTrade(buyOrder, restingSellOrder, bestAskPrice, OrderSide.BUY, tradeIdSupplier, executedTrades);
 
-            if (bestSellOrder.isFilled()) {
+            if (restingSellOrder.isFilled()) {
                 sellOrdersAtBestPrice.poll();
             }
 
@@ -97,7 +114,7 @@ public class OrderBook {
         }
     }
 
-    private void matchSellOrder(Order sellOrder, LongSupplier tradeIdSupplier, List<Trade> executedTrades) {
+    private void matchSellOrder(Order sellOrder, Supplier<String> tradeIdSupplier, List<Trade> executedTrades) {
         // Buy levels are sorted highest price first, so firstEntry is the best bid.
         while (!sellOrder.isFilled() && !buyLevels.isEmpty()) {
             Map.Entry<BigDecimal, Queue<Order>> bestBidLevel = buyLevels.firstEntry();
@@ -108,11 +125,11 @@ public class OrderBook {
             }
 
             Queue<Order> buyOrdersAtBestPrice = bestBidLevel.getValue();
-            Order bestBuyOrder = buyOrdersAtBestPrice.peek();
+            Order restingBuyOrder = buyOrdersAtBestPrice.peek();
 
-            executeTrade(bestBuyOrder, sellOrder, bestBidPrice, tradeIdSupplier, executedTrades);
+            executeTrade(restingBuyOrder, sellOrder, bestBidPrice, OrderSide.SELL, tradeIdSupplier, executedTrades);
 
-            if (bestBuyOrder.isFilled()) {
+            if (restingBuyOrder.isFilled()) {
                 buyOrdersAtBestPrice.poll();
             }
 
@@ -135,28 +152,43 @@ public class OrderBook {
     private void executeTrade(
             Order buyOrder,
             Order sellOrder,
-            BigDecimal tradePrice,
-            LongSupplier tradeIdSupplier,
+            BigDecimal restingOrderPrice,
+            OrderSide aggressorSide,
+            Supplier<String> tradeIdSupplier,
             List<Trade> executedTrades
     ) {
         int executedQuantity = Math.min(buyOrder.getRemainingQuantity(), sellOrder.getRemainingQuantity());
 
         buyOrder.reduceQuantity(executedQuantity);
         sellOrder.reduceQuantity(executedQuantity);
+        updateStatusAfterExecution(buyOrder);
+        updateStatusAfterExecution(sellOrder);
 
         executedTrades.add(new Trade(
-                tradeIdSupplier.getAsLong(),
+                tradeIdSupplier.get(),
                 buyOrder.getOrderId(),
                 sellOrder.getOrderId(),
                 symbol,
                 executedQuantity,
-                tradePrice,
+                restingOrderPrice,
+                aggressorSide,
                 LocalDateTime.now()
         ));
     }
 
+    private void updateStatusAfterExecution(Order order) {
+        if (order.isFilled()) {
+            order.setStatus(OrderStatus.FILLED);
+        } else {
+            order.setStatus(OrderStatus.PARTIALLY_FILLED);
+        }
+    }
+
     private void storeRemainingLimitOrder(Order order, TreeMap<BigDecimal, Queue<Order>> targetLevels) {
         if (order.getOrderType() == OrderType.LIMIT && !order.isFilled()) {
+            if (order.getStatus() != OrderStatus.PARTIALLY_FILLED) {
+                order.setStatus(OrderStatus.NEW);
+            }
             targetLevels.computeIfAbsent(order.getPrice(), ignored -> new ArrayDeque<>()).add(order);
         }
     }
@@ -171,6 +203,7 @@ public class OrderBook {
 
             int totalQuantity = entry.getValue()
                     .stream()
+                    .filter(Order::isActive)
                     .mapToInt(Order::getRemainingQuantity)
                     .sum();
 

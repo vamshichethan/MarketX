@@ -4,7 +4,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 public class Order {
-    private final long orderId;
+    private final String orderId;
     private final OrderSide side;
     private final OrderType orderType;
     private final String symbol;
@@ -12,15 +12,17 @@ public class Order {
     private int remainingQuantity;
     private final BigDecimal price;
     private final LocalDateTime timestamp;
+    private OrderStatus status;
 
     public Order(
-            long orderId,
+            String orderId,
             OrderSide side,
             OrderType orderType,
             String symbol,
             int quantity,
             BigDecimal price,
-            LocalDateTime timestamp
+            LocalDateTime timestamp,
+            OrderStatus status
     ) {
         this.orderId = orderId;
         this.side = side;
@@ -30,9 +32,10 @@ public class Order {
         this.remainingQuantity = quantity;
         this.price = price;
         this.timestamp = timestamp;
+        this.status = status;
     }
 
-    public long getOrderId() {
+    public String getOrderId() {
         return orderId;
     }
 
@@ -68,12 +71,25 @@ public class Order {
         return timestamp;
     }
 
+    public OrderStatus getStatus() {
+        return status;
+    }
+
+    public void setStatus(OrderStatus status) {
+        this.status = status;
+    }
+
     public void reduceQuantity(int executedQuantity) {
         if (executedQuantity < 0 || executedQuantity > remainingQuantity) {
             throw new IllegalArgumentException("Executed quantity must be between 0 and remaining order quantity.");
         }
 
         remainingQuantity -= executedQuantity;
+    }
+
+    public boolean isActive() {
+        return orderType == OrderType.LIMIT
+                && (status == OrderStatus.NEW || status == OrderStatus.PARTIALLY_FILLED);
     }
 
     public boolean isFilled() {

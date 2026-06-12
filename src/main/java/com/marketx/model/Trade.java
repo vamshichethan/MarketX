@@ -4,21 +4,23 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 public class Trade {
-    private final long tradeId;
-    private final long buyOrderId;
-    private final long sellOrderId;
+    private final String tradeId;
+    private final String buyOrderId;
+    private final String sellOrderId;
     private final String symbol;
     private final int quantity;
     private final BigDecimal price;
+    private final OrderSide aggressorSide;
     private final LocalDateTime timestamp;
 
     public Trade(
-            long tradeId,
-            long buyOrderId,
-            long sellOrderId,
+            String tradeId,
+            String buyOrderId,
+            String sellOrderId,
             String symbol,
             int quantity,
             BigDecimal price,
+            OrderSide aggressorSide,
             LocalDateTime timestamp
     ) {
         this.tradeId = tradeId;
@@ -27,18 +29,19 @@ public class Trade {
         this.symbol = symbol;
         this.quantity = quantity;
         this.price = price;
+        this.aggressorSide = aggressorSide;
         this.timestamp = timestamp;
     }
 
-    public long getTradeId() {
+    public String getTradeId() {
         return tradeId;
     }
 
-    public long getBuyOrderId() {
+    public String getBuyOrderId() {
         return buyOrderId;
     }
 
-    public long getSellOrderId() {
+    public String getSellOrderId() {
         return sellOrderId;
     }
 
@@ -52,6 +55,10 @@ public class Trade {
 
     public BigDecimal getPrice() {
         return price;
+    }
+
+    public OrderSide getAggressorSide() {
+        return aggressorSide;
     }
 
     public LocalDateTime getTimestamp() {

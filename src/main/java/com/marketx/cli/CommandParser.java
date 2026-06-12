@@ -21,6 +21,14 @@ public class CommandParser {
                 return parseSymbolCommand(CommandType.BOOK, tokens);
             case "DEPTH":
                 return parseSymbolCommand(CommandType.DEPTH, tokens);
+            case "CANCEL":
+                return parseOrderIdCommand(CommandType.CANCEL, tokens);
+            case "MODIFY":
+                return parseModifyCommand(tokens);
+            case "ORDER":
+                return parseOrderIdCommand(CommandType.ORDER, tokens);
+            case "REPORTS":
+                return parseOrderIdCommand(CommandType.REPORTS, tokens);
             case "TRADES":
                 return tokens.length == 1
                         ? ParsedCommand.valid(CommandType.TRADES)
@@ -55,24 +63,30 @@ public class CommandParser {
         }
 
         String symbol = tokens[3].toUpperCase();
-        int expectedLength = orderType == OrderType.MARKET ? 5 : 6;
 
-        if (tokens.length != expectedLength) {
-            return ParsedCommand.invalid(orderType == OrderType.MARKET
-                    ? "Market order format: PLACE BUY MARKET AAPL 50"
-                    : "Limit order format: PLACE BUY LIMIT AAPL 100 150");
+        if (orderType == OrderType.MARKET && tokens.length != 5 && tokens.length != 6) {
+            return ParsedCommand.invalid("Market order format: PLACE BUY MARKET AAPL 50");
         }
 
-        Integer quantity = parsePositiveInteger(tokens[4]);
+        if (orderType == OrderType.LIMIT && tokens.length != 6) {
+            return ParsedCommand.invalid("Limit order format: PLACE BUY LIMIT AAPL 100 150");
+        }
+
+        Integer quantity = parseInteger(tokens[4]);
         if (quantity == null) {
-            return ParsedCommand.invalid("Quantity must be a positive whole number.");
+            return ParsedCommand.invalid("Quantity must be a whole number.");
         }
 
         BigDecimal price = BigDecimal.ZERO;
         if (orderType == OrderType.LIMIT) {
-            price = parsePositivePrice(tokens[5]);
+            price = parsePrice(tokens[5]);
             if (price == null) {
-                return ParsedCommand.invalid("Limit price must be a positive number.");
+                return ParsedCommand.invalid("Limit price must be a valid number.");
+            }
+        } else if (tokens.length == 6) {
+            price = parsePrice(tokens[5]);
+            if (price == null) {
+                return ParsedCommand.invalid("Market order price must be a valid number when provided.");
             }
         }
 
@@ -87,19 +101,43 @@ public class CommandParser {
         return ParsedCommand.symbol(commandType, tokens[1].toUpperCase());
     }
 
-    private Integer parsePositiveInteger(String value) {
+    private ParsedCommand parseOrderIdCommand(CommandType commandType, String[] tokens) {
+        if (tokens.length != 2) {
+            return ParsedCommand.invalid(commandType + " command format: " + commandType + " ORD-1");
+        }
+
+        return ParsedCommand.orderId(commandType, tokens[1].toUpperCase());
+    }
+
+    private ParsedCommand parseModifyCommand(String[] tokens) {
+        if (tokens.length != 4) {
+            return ParsedCommand.invalid("MODIFY command format: MODIFY ORD-1 200 151");
+        }
+
+        Integer quantity = parseInteger(tokens[2]);
+        if (quantity == null) {
+            return ParsedCommand.invalid("Modified quantity must be a whole number.");
+        }
+
+        BigDecimal price = parsePrice(tokens[3]);
+        if (price == null) {
+            return ParsedCommand.invalid("Modified price must be a valid number.");
+        }
+
+        return ParsedCommand.modify(tokens[1].toUpperCase(), quantity, price);
+    }
+
+    private Integer parseInteger(String value) {
         try {
-            int parsedValue = Integer.parseInt(value);
-            return parsedValue > 0 ? parsedValue : null;
+            return Integer.parseInt(value);
         } catch (NumberFormatException exception) {
             return null;
         }
     }
 
-    private BigDecimal parsePositivePrice(String value) {
+    private BigDecimal parsePrice(String value) {
         try {
-            BigDecimal parsedValue = new BigDecimal(value);
-            return parsedValue.compareTo(BigDecimal.ZERO) > 0 ? parsedValue : null;
+            return new BigDecimal(value);
         } catch (NumberFormatException exception) {
             return null;
         }
@@ -117,6 +155,10 @@ public class CommandParser {
         PLACE,
         BOOK,
         DEPTH,
+        CANCEL,
+        MODIFY,
+        ORDER,
+        REPORTS,
         TRADES,
         HELP,
         EXIT,
@@ -131,6 +173,7 @@ public class CommandParser {
         private final String symbol;
         private final int quantity;
         private final BigDecimal price;
+        private final String orderId;
 
         private ParsedCommand(
                 CommandType commandType,
@@ -139,7 +182,8 @@ public class CommandParser {
                 OrderType orderType,
                 String symbol,
                 int quantity,
-                BigDecimal price
+                BigDecimal price,
+                String orderId
         ) {
             this.commandType = commandType;
             this.errorMessage = errorMessage;
@@ -148,10 +192,11 @@ public class CommandParser {
             this.symbol = symbol;
             this.quantity = quantity;
             this.price = price;
+            this.orderId = orderId;
         }
 
         public static ParsedCommand valid(CommandType commandType) {
-            return new ParsedCommand(commandType, null, null, null, null, 0, BigDecimal.ZERO);
+            return new ParsedCommand(commandType, null, null, null, null, 0, BigDecimal.ZERO, null);
         }
 
         public static ParsedCommand place(
@@ -161,15 +206,23 @@ public class CommandParser {
                 int quantity,
                 BigDecimal price
         ) {
-            return new ParsedCommand(CommandType.PLACE, null, side, orderType, symbol, quantity, price);
+            return new ParsedCommand(CommandType.PLACE, null, side, orderType, symbol, quantity, price, null);
         }
 
         public static ParsedCommand symbol(CommandType commandType, String symbol) {
-            return new ParsedCommand(commandType, null, null, null, symbol, 0, BigDecimal.ZERO);
+            return new ParsedCommand(commandType, null, null, null, symbol, 0, BigDecimal.ZERO, null);
+        }
+
+        public static ParsedCommand orderId(CommandType commandType, String orderId) {
+            return new ParsedCommand(commandType, null, null, null, null, 0, BigDecimal.ZERO, orderId);
+        }
+
+        public static ParsedCommand modify(String orderId, int quantity, BigDecimal price) {
+            return new ParsedCommand(CommandType.MODIFY, null, null, null, null, quantity, price, orderId);
         }
 
         public static ParsedCommand invalid(String errorMessage) {
-            return new ParsedCommand(CommandType.INVALID, errorMessage, null, null, null, 0, BigDecimal.ZERO);
+            return new ParsedCommand(CommandType.INVALID, errorMessage, null, null, null, 0, BigDecimal.ZERO, null);
         }
 
         public CommandType getCommandType() {
@@ -198,6 +251,10 @@ public class CommandParser {
 
         public BigDecimal getPrice() {
             return price;
+        }
+
+        public String getOrderId() {
+            return orderId;
         }
     }
 }
