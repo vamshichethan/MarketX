@@ -6,6 +6,7 @@ import {
   MessageSquareText,
   PieChart,
   RadioTower,
+  RotateCcw,
   Send
 } from 'lucide-react';
 
@@ -17,7 +18,8 @@ const items = [
   { id: 'pnl', label: 'PnL', icon: LineChart },
   { id: 'market-data', label: 'Market Data', icon: RadioTower },
   { id: 'analytics', label: 'Analytics', icon: BarChart3 },
-  { id: 'fix', label: 'FIX Gateway', icon: MessageSquareText }
+  { id: 'fix', label: 'FIX Gateway', icon: MessageSquareText },
+  { id: 'replay', label: 'Historical Replay', icon: RotateCcw }
 ];
 
 export default function Sidebar({ activePage, onNavigate }) {

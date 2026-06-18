@@ -3,11 +3,12 @@ import { errorMessage } from '../api/http';
 import { pnlApi } from '../api/pnlApi';
 import DataTable from '../components/DataTable';
 import StatCard from '../components/StatCard';
-import { integer, money, signedClass } from '../utils';
+import { mockPnlRows } from '../mockMarket';
+import { integer, money, normalizeRows, signedClass } from '../utils';
 
 export default function PnlPage() {
   const [accountId, setAccountId] = useState('TRADER-1');
-  const [rows, setRows] = useState([]);
+  const [rows, setRows] = useState(() => mockPnlRows());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -15,10 +16,12 @@ export default function PnlPage() {
     if (!accountId.trim()) return;
     try {
       const response = await pnlApi.getPnl(accountId.trim());
-      setRows(Array.isArray(response) ? response : []);
+      const nextRows = normalizeRows(response);
+      setRows(nextRows.length ? nextRows : mockPnlRows());
       setError('');
     } catch (err) {
-      setError(errorMessage(err, 'PnL API unavailable'));
+      setRows(mockPnlRows());
+      setError(`${errorMessage(err, 'PnL API unavailable')} - showing simulated marks`);
     } finally {
       setLoading(false);
     }
@@ -27,7 +30,11 @@ export default function PnlPage() {
   useEffect(() => {
     fetchPnl();
     const id = setInterval(fetchPnl, 2000);
-    return () => clearInterval(id);
+    const markId = setInterval(() => setRows(mockPnlRows()), 1000);
+    return () => {
+      clearInterval(id);
+      clearInterval(markId);
+    };
   }, [accountId]);
 
   const totals = useMemo(() => ({
@@ -57,7 +64,8 @@ export default function PnlPage() {
         <StatCard title="Total Unrealized" value={money(totals.unrealized)} variant={totals.unrealized >= 0 ? 'positive' : 'negative'} />
         <StatCard title="Total PnL" value={money(totals.total)} variant={totals.total >= 0 ? 'positive' : 'negative'} />
       </div>
-      <DataTable columns={columns} rows={rows} loading={loading} error={error} />
+      {error && <div className="rounded border border-amber-900 bg-amber-950/20 p-3 text-xs text-amber-200">{error}</div>}
+      <DataTable columns={columns} rows={rows} loading={loading} />
     </div>
   );
 }

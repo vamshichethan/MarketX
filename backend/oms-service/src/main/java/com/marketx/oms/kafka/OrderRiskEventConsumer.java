@@ -1,9 +1,11 @@
 package com.marketx.oms.kafka;
 
 import com.marketx.common.events.KafkaTopics;
+import com.marketx.common.events.OrderCancelRequestedEvent;
 import com.marketx.common.events.OrderRiskApprovedEvent;
 import com.marketx.common.events.OrderRiskRejectedEvent;
 import com.marketx.common.events.TradeExecutedEvent;
+import com.marketx.common.events.OrderSubmittedEvent;
 import com.marketx.oms.entity.ProcessedEventEntity;
 import com.marketx.oms.repository.ProcessedEventRepository;
 import com.marketx.oms.service.OrderService;
@@ -31,6 +33,21 @@ public class OrderRiskEventConsumer {
         this.orderService = orderService;
         this.tradeService = tradeService;
         this.processedEventRepository = processedEventRepository;
+    }
+
+    @KafkaListener(topics = KafkaTopics.ORDERS_SUBMITTED)
+    public void onOrderSubmitted(OrderSubmittedEvent event) {
+        if (skipProcessed(event.eventId(), "OrderSubmittedEvent")) {
+            return;
+        }
+
+        try {
+            log.info("Consumed {} eventId={} orderId={}", KafkaTopics.ORDERS_SUBMITTED, event.eventId(), event.orderId());
+            orderService.handleOrderSubmitted(event);
+            markProcessed(event.eventId(), "OrderSubmittedEvent");
+        } catch (RuntimeException exception) {
+            log.error("Failed to process order submitted eventId={} orderId={}", event.eventId(), event.orderId(), exception);
+        }
     }
 
     @KafkaListener(topics = KafkaTopics.ORDERS_RISK_APPROVED)
@@ -75,6 +92,21 @@ public class OrderRiskEventConsumer {
             markProcessed(event.eventId(), "TradeExecutedEvent");
         } catch (RuntimeException exception) {
             log.error("Failed to process trade executed eventId={} tradeId={}", event.eventId(), event.tradeId(), exception);
+        }
+    }
+
+    @KafkaListener(topics = KafkaTopics.ORDERS_CANCEL_REQUESTED)
+    public void onCancelRequested(OrderCancelRequestedEvent event) {
+        if (skipProcessed(event.eventId(), "OrderCancelRequestedEvent")) {
+            return;
+        }
+
+        try {
+            log.info("Consumed {} eventId={} originalOrderId={}", KafkaTopics.ORDERS_CANCEL_REQUESTED, event.eventId(), event.originalOrderId());
+            orderService.handleCancelRequested(event);
+            markProcessed(event.eventId(), "OrderCancelRequestedEvent");
+        } catch (RuntimeException exception) {
+            log.error("Failed to process cancel requested eventId={} originalOrderId={}", event.eventId(), event.originalOrderId(), exception);
         }
     }
 

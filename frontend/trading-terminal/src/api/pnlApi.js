@@ -1,9 +1,16 @@
-import { createClient } from './http';
+import { mockPnlRows } from '../mockMarket';
+import { createClient, withNetworkFallback } from './http';
 
 const pnl = createClient(import.meta.env.VITE_PNL_API || 'http://localhost:8082');
 
 export const pnlApi = {
-  getPnl: (accountId) => pnl.get(`/pnl/${accountId}`).then((res) => res.data),
-  getSymbolPnl: (accountId, symbol) => pnl.get(`/pnl/${accountId}/${symbol}`).then((res) => res.data),
-  publishMarketPrice: (payload) => pnl.post('/market-prices/publish', payload).then((res) => res.data)
+  getPnl: (accountId) => withNetworkFallback(pnl.get(`/pnl/${accountId}`), () => mockPnlRows()),
+  getSymbolPnl: (accountId, symbol) => withNetworkFallback(
+    pnl.get(`/pnl/${accountId}/${symbol}`),
+    () => mockPnlRows().find((row) => row.symbol === symbol)
+  ),
+  publishMarketPrice: (payload) => withNetworkFallback(pnl.post('/market-prices/publish', payload), {
+    status: 'PUBLISHED',
+    ...payload
+  })
 };

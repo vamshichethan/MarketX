@@ -3,10 +3,11 @@ import { useEffect, useState } from 'react';
 import { errorMessage } from '../api/http';
 import { marketDataApi } from '../api/marketDataApi';
 import DataTable from '../components/DataTable';
-import { integer, money, normalizeRows, signedClass } from '../utils';
+import { mockMarketRows } from '../mockMarket';
+import { askPrice, bidPrice, integer, money, normalizeRows, signedClass } from '../utils';
 
 export default function MarketDataPage() {
-  const [rows, setRows] = useState([]);
+  const [rows, setRows] = useState(() => mockMarketRows());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [actionMessage, setActionMessage] = useState('');
@@ -14,10 +15,12 @@ export default function MarketDataPage() {
   async function fetchMarketData() {
     try {
       const response = await marketDataApi.getLatest();
-      setRows(normalizeRows(response));
+      const nextRows = normalizeRows(response);
+      setRows(nextRows.length ? nextRows : mockMarketRows());
       setError('');
     } catch (err) {
-      setError(errorMessage(err, 'Market data API unavailable'));
+      setRows(mockMarketRows());
+      setError(`${errorMessage(err, 'Market data API unavailable')} - showing consolidated simulated feed`);
     } finally {
       setLoading(false);
     }
@@ -36,19 +39,27 @@ export default function MarketDataPage() {
   useEffect(() => {
     fetchMarketData();
     const id = setInterval(fetchMarketData, 1000);
-    return () => clearInterval(id);
+    const tickId = setInterval(() => setRows(mockMarketRows()), 1000);
+    return () => {
+      clearInterval(id);
+      clearInterval(tickId);
+    };
   }, []);
 
   const columns = [
     { key: 'symbol', label: 'Symbol' },
     { key: 'price', label: 'Price', align: 'right', render: (row) => <span className="font-mono text-amber-300">{money(row.price)}</span> },
-    { key: 'previousPrice', label: 'Prev', align: 'right', render: (row) => <span className="font-mono">{money(row.previousPrice)}</span> },
-    { key: 'change', label: 'Change', align: 'right', render: (row) => <span className={signedClass(row.change)}>{money(row.change)}</span> },
-    { key: 'changePercent', label: 'Change %', align: 'right', render: (row) => <span className={signedClass(row.changePercent)}>{money(row.changePercent)}%</span> },
+    { key: 'previousPrice', label: 'Prev', align: 'right', render: (row) => <span className="font-mono">{money(row.previousPrice ?? Number(row.price || 0) - Number(row.dayChange || 0))}</span> },
+    { key: 'change', label: 'Change', align: 'right', render: (row) => <span className={signedClass(row.change ?? row.dayChange)}>{money(row.change ?? row.dayChange)}</span> },
+    { key: 'changePercent', label: 'Change %', align: 'right', render: (row) => <span className={signedClass(row.changePercent ?? row.dayChangePct)}>{money(row.changePercent ?? row.dayChangePct)}%</span> },
     { key: 'volume', label: 'Volume', align: 'right', render: (row) => <span className="font-mono">{integer(row.volume)}</span> },
-    { key: 'bid', label: 'Bid', align: 'right', render: (row) => <span className="font-mono text-emerald-300">{money(row.bid)}</span> },
-    { key: 'ask', label: 'Ask', align: 'right', render: (row) => <span className="font-mono text-red-300">{money(row.ask)}</span> },
-    { key: 'spread', label: 'Spread', align: 'right', render: (row) => <span className="font-mono">{money(row.spread ?? (row.ask && row.bid ? Number(row.ask) - Number(row.bid) : null))}</span> },
+    { key: 'bid', label: 'Bid', align: 'right', render: (row) => <span className="font-mono text-emerald-300">{money(bidPrice(row))}</span> },
+    { key: 'ask', label: 'Ask', align: 'right', render: (row) => <span className="font-mono text-red-300">{money(askPrice(row))}</span> },
+    { key: 'spread', label: 'Spread', align: 'right', render: (row) => {
+      const bid = bidPrice(row);
+      const ask = askPrice(row);
+      return <span className="font-mono">{money(row.spread ?? (ask && bid ? Number(ask) - Number(bid) : null))}</span>;
+    } },
     { key: 'timestamp', label: 'Timestamp', render: (row) => <span className="font-mono text-slate-400">{row.timestamp || row.updatedAt || '--'}</span> }
   ];
 
@@ -63,7 +74,8 @@ export default function MarketDataPage() {
         </div>
       </div>
       {actionMessage && <div className="text-xs text-slate-400">{actionMessage}</div>}
-      <DataTable columns={columns} rows={rows} loading={loading} error={error} />
+      {error && <div className="rounded border border-amber-900 bg-amber-950/20 p-3 text-xs text-amber-200">{error}</div>}
+      <DataTable columns={columns} rows={rows} loading={loading} />
     </div>
   );
 }

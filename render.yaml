@@ -1,0 +1,253 @@
+previews:
+  generation: off
+
+databases:
+  - name: marketx-oms-db
+    databaseName: marketx_oms
+    user: marketx
+    ipAllowList: []
+  - name: marketx-position-db
+    databaseName: marketx_positions
+    user: marketx
+    ipAllowList: []
+  - name: marketx-pnl-db
+    databaseName: marketx_pnl
+    user: marketx
+    ipAllowList: []
+  - name: marketx-risk-db
+    databaseName: marketx_risk
+    user: marketx
+    ipAllowList: []
+  - name: marketx-analytics-db
+    databaseName: marketx_analytics
+    user: marketx
+    ipAllowList: []
+  - name: marketx-fix-db
+    databaseName: marketx_fix
+    user: marketx
+    ipAllowList: []
+  - name: marketx-replay-db
+    databaseName: marketx_replay
+    user: marketx
+    ipAllowList: []
+
+services:
+  - type: keyvalue
+    name: marketx-redis
+    region: singapore
+    ipAllowList: []
+
+  - type: pserv
+    name: marketx-kafka
+    runtime: image
+    region: singapore
+    plan: starter
+    image:
+      url: bitnami/kafka:3.7
+    disk:
+      name: kafka-data
+      mountPath: /bitnami/kafka
+      sizeGB: 10
+    envVars:
+      - key: KAFKA_CFG_NODE_ID
+        value: 1
+      - key: KAFKA_CFG_PROCESS_ROLES
+        value: broker,controller
+      - key: KAFKA_CFG_CONTROLLER_QUORUM_VOTERS
+        value: 1@marketx-kafka:9093
+      - key: KAFKA_CFG_LISTENERS
+        value: PLAINTEXT://:9092,CONTROLLER://:9093
+      - key: KAFKA_CFG_ADVERTISED_LISTENERS
+        value: PLAINTEXT://marketx-kafka:9092
+      - key: KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP
+        value: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - key: KAFKA_CFG_CONTROLLER_LISTENER_NAMES
+        value: CONTROLLER
+      - key: KAFKA_CFG_INTER_BROKER_LISTENER_NAME
+        value: PLAINTEXT
+      - key: KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE
+        value: "true"
+      - key: ALLOW_PLAINTEXT_LISTENER
+        value: "yes"
+
+  - type: pserv
+    name: marketx-position-service
+    runtime: docker
+    region: singapore
+    plan: starter
+    dockerContext: ./backend
+    dockerfilePath: ./backend/position-service/Dockerfile
+    envVars:
+      - fromGroup: marketx-backend-common
+      - key: DATABASE_URL
+        fromDatabase:
+          name: marketx-position-db
+          property: connectionString
+
+  - type: pserv
+    name: marketx-pnl-service
+    runtime: docker
+    region: singapore
+    plan: starter
+    dockerContext: ./backend
+    dockerfilePath: ./backend/pnl-service/Dockerfile
+    envVars:
+      - fromGroup: marketx-backend-common
+      - key: DATABASE_URL
+        fromDatabase:
+          name: marketx-pnl-db
+          property: connectionString
+
+  - type: pserv
+    name: marketx-risk-service
+    runtime: docker
+    region: singapore
+    plan: starter
+    dockerContext: ./backend
+    dockerfilePath: ./backend/risk-service/Dockerfile
+    envVars:
+      - fromGroup: marketx-backend-common
+      - key: DATABASE_URL
+        fromDatabase:
+          name: marketx-risk-db
+          property: connectionString
+      - key: MARKETX_POSITION_SERVICE_URL
+        value: http://marketx-position-service:8081
+      - key: MARKETX_PNL_SERVICE_URL
+        value: http://marketx-pnl-service:8082
+
+  - type: pserv
+    name: marketx-oms-service
+    runtime: docker
+    region: singapore
+    plan: starter
+    dockerContext: ./backend
+    dockerfilePath: ./backend/oms-service/Dockerfile
+    envVars:
+      - fromGroup: marketx-backend-common
+      - key: DATABASE_URL
+        fromDatabase:
+          name: marketx-oms-db
+          property: connectionString
+      - key: MARKETX_RISK_SERVICE_URL
+        value: http://marketx-risk-service:8083
+
+  - type: pserv
+    name: marketx-market-data-service
+    runtime: docker
+    region: singapore
+    plan: starter
+    dockerContext: ./backend
+    dockerfilePath: ./backend/market-data-service/Dockerfile
+    envVars:
+      - fromGroup: marketx-backend-common
+      - key: COINGECKO_API_KEY
+        sync: false
+      - key: TWELVE_DATA_API_KEY
+        sync: false
+      - key: FINNHUB_API_KEY
+        sync: false
+
+  - type: pserv
+    name: marketx-analytics-service
+    runtime: docker
+    region: singapore
+    plan: starter
+    dockerContext: ./backend
+    dockerfilePath: ./backend/analytics-service/Dockerfile
+    envVars:
+      - fromGroup: marketx-backend-common
+      - key: DATABASE_URL
+        fromDatabase:
+          name: marketx-analytics-db
+          property: connectionString
+
+  - type: pserv
+    name: marketx-fix-gateway-service
+    runtime: docker
+    region: singapore
+    plan: starter
+    dockerContext: ./backend
+    dockerfilePath: ./backend/fix-gateway-service/Dockerfile
+    envVars:
+      - fromGroup: marketx-backend-common
+      - key: DATABASE_URL
+        fromDatabase:
+          name: marketx-fix-db
+          property: connectionString
+
+  - type: pserv
+    name: marketx-replay-service
+    runtime: docker
+    region: singapore
+    plan: starter
+    dockerContext: ./backend
+    dockerfilePath: ./backend/replay-service/Dockerfile
+    envVars:
+      - fromGroup: marketx-backend-common
+      - key: DATABASE_URL
+        fromDatabase:
+          name: marketx-replay-db
+          property: connectionString
+
+  - type: web
+    name: marketx-api-gateway
+    runtime: docker
+    region: singapore
+    plan: starter
+    dockerContext: ./nginx
+    dockerfilePath: ./nginx/Dockerfile.render
+    healthCheckPath: /health
+    envVars:
+      - key: OMS_HOST
+        fromService:
+          name: marketx-oms-service
+          type: pserv
+          property: host
+      - key: POSITION_HOST
+        fromService:
+          name: marketx-position-service
+          type: pserv
+          property: host
+      - key: PNL_HOST
+        fromService:
+          name: marketx-pnl-service
+          type: pserv
+          property: host
+      - key: RISK_HOST
+        fromService:
+          name: marketx-risk-service
+          type: pserv
+          property: host
+      - key: MARKET_DATA_HOST
+        fromService:
+          name: marketx-market-data-service
+          type: pserv
+          property: host
+      - key: ANALYTICS_HOST
+        fromService:
+          name: marketx-analytics-service
+          type: pserv
+          property: host
+      - key: FIX_HOST
+        fromService:
+          name: marketx-fix-gateway-service
+          type: pserv
+          property: host
+      - key: REPLAY_HOST
+        fromService:
+          name: marketx-replay-service
+          type: pserv
+          property: host
+
+envVarGroups:
+  - name: marketx-backend-common
+    envVars:
+      - key: SPRING_PROFILES_ACTIVE
+        value: docker
+      - key: SPRING_KAFKA_BOOTSTRAP_SERVERS
+        value: marketx-kafka:9092
+      - key: REDIS_HOST
+        value: marketx-redis
+      - key: REDIS_PORT
+        value: 6379

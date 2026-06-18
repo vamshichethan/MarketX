@@ -1211,6 +1211,528 @@ mvn install
 
 Full Phase 8 notes are in [Phase 8 Kafka Event Bus](docs/phase-8-kafka-event-bus.md).
 
+## Phase 9: Market Data Feed
+
+Phase 9 adds a Spring Boot Market Data Service under `backend/market-data-service`.
+
+The service generates simulated live prices once per second for:
+
+- `AAPL`, starting at `150.00`
+- `MSFT`, starting at `420.00`
+- `GOOG`, starting at `180.00`
+
+Each tick moves the price slightly up or down, calculates volume, bid, ask, spread, absolute change, and percent change, then publishes the update to Kafka.
+
+### Market Data Topics
+
+| Topic | Purpose |
+| --- | --- |
+| `market-data` | New enriched Phase 9 market data feed. |
+| `market.prices` | Backward-compatible Phase 8 price topic used by existing Risk and PnL consumers. |
+
+### Why Market Data Matters
+
+Trading platforms need live prices to make decisions:
+
+- Risk uses latest prices for market order exposure checks.
+- PnL uses latest prices to recalculate unrealized PnL.
+- Analytics can later consume the same feed for dashboards, alerts, and trend calculations.
+
+### Phase 9 Architecture
+
+```mermaid
+flowchart LR
+    MarketData["Market Data Service"]
+    Kafka["Kafka: market-data / market.prices"]
+    Risk["Risk Service"]
+    Pnl["PnL Service"]
+    Analytics["Analytics Service"]
+
+    MarketData --> Kafka
+    Kafka --> Risk
+    Kafka --> Pnl
+    Kafka --> Analytics
+```
+
+### Market Data Event
+
+The `market-data` topic carries enriched events:
+
+```json
+{
+  "eventId": "EVT-1",
+  "symbol": "AAPL",
+  "price": 150.25,
+  "previousPrice": 150.00,
+  "change": 0.25,
+  "changePercent": 0.1667,
+  "volume": 1200,
+  "bidPrice": 150.20,
+  "askPrice": 150.30,
+  "spread": 0.10,
+  "timestamp": "2026-06-09T10:00:00"
+}
+```
+
+### Market Data APIs
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| `GET` | `/market-data/latest` | Latest prices for all symbols. |
+| `GET` | `/market-data/latest/{symbol}` | Latest price for one symbol. |
+| `POST` | `/market-data/start` | Start scheduled publishing. |
+| `POST` | `/market-data/stop` | Stop scheduled publishing. |
+| `POST` | `/market-data/tick` | Manually publish one tick for all symbols. |
+| `POST` | `/market-data/symbols` | Add a new symbol with a starting price. |
+
+### Run Market Data Service
+
+```bash
+cd backend/market-data-service
+mvn spring-boot:run
+```
+
+Sample commands:
+
+```bash
+curl http://localhost:8084/market-data/latest
+curl http://localhost:8084/market-data/latest/AAPL
+curl -X POST http://localhost:8084/market-data/stop
+curl -X POST http://localhost:8084/market-data/start
+curl -X POST http://localhost:8084/market-data/tick
+curl -X POST http://localhost:8084/market-data/symbols \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbol": "TSLA",
+    "startingPrice": 250.0
+  }'
+```
+
+## Phase 10: Analytics Service
+
+Phase 10 adds a Spring Boot Analytics Service under `backend/analytics-service`.
+
+The service consumes live market data and executed trades from Kafka, stores symbol-level metrics in PostgreSQL, and exposes dashboard-ready REST APIs.
+
+### Analytics Metrics
+
+| Metric | Meaning |
+| --- | --- |
+| VWAP | Total traded value divided by total traded volume. |
+| Volume | Total executed trade quantity for the symbol. |
+| Spread | Latest ask price minus latest bid price from market data. |
+| Trade Count | Number of executed trades processed for the symbol. |
+
+VWAP example:
+
+```text
+Trade 1: 100 @ 150 = 15000
+Trade 2: 200 @ 153 = 30600
+
+totalVolume = 300
+totalTradedValue = 45600
+VWAP = 152.00
+```
+
+### Analytics Architecture
+
+```mermaid
+flowchart LR
+    Trades["Kafka: trades.executed"] --> Analytics["Analytics Service"]
+    MarketData["Kafka: market-data"] --> Analytics
+    Analytics --> Postgres["PostgreSQL"]
+    Postgres --> APIs["Dashboard APIs"]
+```
+
+### Kafka Topics Consumed
+
+| Topic | Purpose |
+| --- | --- |
+| `market-data` | Updates latest price, bid, ask, and spread. |
+| `market.prices` | Compatibility price updates for latest price only. |
+| `trades.executed` | Updates VWAP, executed volume, total traded value, and trade count. |
+
+### Analytics APIs
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| `GET` | `/analytics/{symbol}` | Analytics for one symbol. |
+| `GET` | `/analytics` | Analytics for all symbols. |
+| `GET` | `/analytics/dashboard` | Compact dashboard-ready summary. |
+| `DELETE` | `/analytics/{symbol}/reset` | Reset one symbol. |
+| `DELETE` | `/analytics/reset` | Reset all analytics rows. |
+| `POST` | `/analytics/events/trade` | Manually process a trade event. |
+| `POST` | `/analytics/events/market-data` | Manually process a market data event. |
+
+### Run Analytics Service
+
+```bash
+cd backend/analytics-service
+mvn spring-boot:run
+```
+
+Sample commands:
+
+```bash
+curl http://localhost:8085/analytics/AAPL
+curl http://localhost:8085/analytics/dashboard
+curl -X POST http://localhost:8085/analytics/events/market-data \
+  -H "Content-Type: application/json" \
+  -d '{
+    "eventId": "MD-1",
+    "symbol": "AAPL",
+    "price": 150.50,
+    "previousPrice": 150.00,
+    "change": 0.50,
+    "changePercent": 0.33,
+    "volume": 1000,
+    "bidPrice": 150.45,
+    "askPrice": 150.55,
+    "spread": 0.10,
+    "timestamp": "2026-06-09T10:00:00"
+  }'
+curl -X POST http://localhost:8085/analytics/events/trade \
+  -H "Content-Type: application/json" \
+  -d '{
+    "eventId": "TRD-EVT-1",
+    "tradeId": "TRD-1",
+    "symbol": "AAPL",
+    "quantity": 100,
+    "price": 150.00,
+    "buyOrderId": "ORD-1",
+    "sellOrderId": "ORD-2",
+    "buyAccountId": "TRADER-1",
+    "sellAccountId": "TRADER-2",
+    "aggressorSide": "BUY",
+    "executedAt": "2026-06-09T10:01:00"
+  }'
+```
+
+## Phase 11: FIX Gateway
+
+Phase 11 adds a simplified educational FIX Gateway under `backend/fix-gateway-service`.
+
+The gateway accepts pipe-delimited FIX-style messages over REST, validates them, converts supported messages into internal MarketX Kafka events, stores inbound and outbound FIX messages for audit, and generates simplified FIX `35=8` Execution Reports from internal outcomes.
+
+This phase does not use QuickFIX/J and does not implement a full production FIX session engine.
+
+### FIX Gateway Architecture
+
+```mermaid
+flowchart LR
+    Client["External Client"] --> Fix["FIX Gateway"]
+    Fix --> Submitted["Kafka: orders.submitted"]
+    Submitted --> Risk["Risk Service"]
+    Risk --> OMS["OMS / Exchange"]
+    OMS --> Trades["Kafka: trades.executed"]
+    Trades --> Fix
+    Fix --> Report["FIX Execution Report"]
+```
+
+### Supported FIX Messages
+
+| MsgType | Meaning |
+| --- | --- |
+| `35=D` | New Order Single |
+| `35=F` | Order Cancel Request |
+| `35=8` | Execution Report generated by MarketX |
+
+Important tags:
+
+| Tag | Meaning |
+| --- | --- |
+| `11` | Client order id, or `ClOrdID`. |
+| `41` | Original client order id for cancels. |
+| `55` | Symbol. |
+| `54` | Side: `1` = BUY, `2` = SELL. |
+| `38` | Quantity. |
+| `40` | Order type: `1` = MARKET, `2` = LIMIT. |
+| `44` | Limit price. |
+| `60` | Transaction time. |
+
+### FIX Kafka Topics
+
+Produced:
+
+| Topic | Purpose |
+| --- | --- |
+| `fix.inbound` | Raw inbound FIX audit stream. |
+| `orders.submitted` | New orders converted from `35=D`. |
+| `orders.cancel.requested` | Cancel requests converted from `35=F`. |
+| `fix.execution.reports` | Outbound raw FIX `35=8` reports. |
+
+Consumed:
+
+| Topic | Purpose |
+| --- | --- |
+| `trades.executed` | Generates fill execution reports. |
+| `orders.risk.rejected` | Generates rejected execution reports. |
+| `orders.cancelled` | Generates cancelled execution reports. |
+
+### FIX Gateway APIs
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| `POST` | `/fix/messages` | Submit a simplified FIX message. |
+| `GET` | `/fix/reports` | Return generated FIX execution reports. |
+| `GET` | `/fix/reports/{clOrdId}` | Return reports for one client order id. |
+
+### Run FIX Gateway
+
+```bash
+cd backend/fix-gateway-service
+mvn spring-boot:run
+```
+
+Sample commands:
+
+```bash
+curl -X POST http://localhost:8086/fix/messages \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "8=FIX.4.4|35=D|49=CLIENT1|56=MARKETX|11=CLORD-1|55=AAPL|54=1|38=100|40=2|44=150.00|60=20260609-10:00:00|"
+  }'
+curl -X POST http://localhost:8086/fix/messages \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "8=FIX.4.4|35=D|49=CLIENT2|56=MARKETX|11=CLORD-2|55=AAPL|54=2|38=100|40=2|44=150.00|60=20260609-10:00:05|"
+  }'
+curl http://localhost:8086/fix/reports
+curl http://localhost:8086/fix/reports/CLORD-1
+```
+
+Example generated `35=8` fill report:
+
+```text
+8=FIX.4.4|35=8|49=MARKETX|56=CLIENT1|11=CLORD-1|17=EXEC-TRD-1-BUY-1|150=2|39=2|55=AAPL|54=1|38=100|14=100|151=0|31=150.00|32=100|60=20260609-10:01:00|
+```
+
+## Phase 12: React Trading Terminal
+
+Phase 12 adds a Bloomberg-style frontend under `frontend/trading-terminal`.
+
+The terminal is a Vite + React JavaScript app using Tailwind CSS, Axios, and Recharts. It gives a compact dark trading UI for interacting with the MarketX backend services.
+
+### Trading Terminal Screens
+
+| Screen | Purpose |
+| --- | --- |
+| Dashboard | Market overview, PnL, volume, and trade count. |
+| Order Entry | Submit BUY/SELL, LIMIT/MARKET orders to OMS. |
+| Order Book | View bids, asks, best bid, best ask, and spread. |
+| Positions | View account positions by symbol. |
+| PnL | View realized, unrealized, and total PnL. |
+| Market Data | View latest prices and control simulated feed updates. |
+| Analytics | View VWAP, spread, volume, and trade count charts. |
+| FIX Gateway | Submit simplified FIX messages and view execution reports. |
+
+### Frontend API Connections
+
+| Service | Port |
+| --- | --- |
+| OMS Service | `8080` |
+| Position Service | `8081` |
+| PnL Service | `8082` |
+| Risk Service | `8083` |
+| Market Data Service | `8084` |
+| Analytics Service | `8085` |
+| FIX Gateway Service | `8086` |
+
+Run the terminal:
+
+```bash
+cd frontend/trading-terminal
+npm install
+npm run dev
+```
+
+Open:
+
+```text
+http://localhost:5173
+```
+
+## Phase 13: Monitoring
+
+Phase 13 adds production-style monitoring for MarketX using Spring Boot Actuator, Micrometer, Prometheus, and Grafana.
+
+Each backend service exposes operational and custom trading metrics at:
+
+```text
+/actuator/prometheus
+```
+
+Each backend service also exposes health at:
+
+```text
+/actuator/health
+```
+
+### Monitoring Architecture
+
+```mermaid
+flowchart LR
+    OMS["OMS Service"]
+    Risk["Risk Service"]
+    Position["Position Service"]
+    PnL["PnL Service"]
+    MarketData["Market Data Service"]
+    Analytics["Analytics Service"]
+    FIX["FIX Gateway"]
+    Prometheus["Prometheus"]
+    Grafana["Grafana"]
+
+    OMS --> Prometheus
+    Risk --> Prometheus
+    Position --> Prometheus
+    PnL --> Prometheus
+    MarketData --> Prometheus
+    Analytics --> Prometheus
+    FIX --> Prometheus
+    Prometheus --> Grafana
+```
+
+### Metrics Exposed
+
+| Area | Metrics |
+| --- | --- |
+| OMS | `orders_submitted_total`, `orders_rejected_total`, `orders_filled_total`, `order_processing_latency_ms_seconds_*` |
+| Risk | `risk_checks_total`, `risk_approved_total`, `risk_rejected_total`, `risk_check_latency_ms_seconds_*` |
+| Market Data | `market_data_ticks_published_total`, `market_data_publish_latency_ms_seconds_*`, `market_data_publishing_enabled` |
+| FIX Gateway | `fix_messages_received_total`, `fix_messages_rejected_total`, `fix_execution_reports_sent_total` |
+| Analytics | `analytics_events_consumed_total`, `analytics_update_latency_ms_seconds_*` |
+| Position | `position_updates_total`, `position_update_latency_ms_seconds_*` |
+| PnL | `pnl_updates_total`, `pnl_calculation_latency_ms_seconds_*` |
+| Platform | `http_server_requests_seconds_*`, `process_cpu_usage`, `jvm_memory_used_bytes`, datasource health metrics |
+
+Prometheus scrapes every service from `monitoring/prometheus/prometheus.yml`. Grafana is provisioned with a default Prometheus datasource and the `MarketX Trading System Monitoring` dashboard.
+
+Start monitoring:
+
+```bash
+docker compose -f docker-compose.monitoring.yml up -d
+```
+
+Open:
+
+```text
+Prometheus: http://localhost:9090
+Grafana:    http://localhost:3000
+Login:      admin / admin
+```
+
+Testing flow:
+
+1. Start PostgreSQL, Kafka, and all backend services.
+2. Start the monitoring stack.
+3. Open Prometheus and search for `orders_submitted_total`, `risk_checks_total`, and `market_data_ticks_published_total`.
+4. Open Grafana and view `MarketX Trading System Monitoring`.
+5. Submit orders and confirm the graphs move.
+
+## Phase 14: Historical Replay Engine
+
+Phase 14 adds a backtesting-style Replay Service under `backend/replay-service`.
+
+The Replay Service loads historical market ticks from CSV, creates replay sessions, and publishes replayed market data into Kafka. This lets MarketX replay old market sessions into the existing analytics, PnL, risk, and trading terminal flows.
+
+### Replay Architecture
+
+```mermaid
+flowchart LR
+    CSV["CSV Historical Data"] --> Replay["Replay Service"]
+    Replay --> Kafka["Kafka: market-data / market.prices"]
+    Kafka --> Analytics["Analytics Service"]
+    Kafka --> PnL["PnL Service"]
+    Kafka --> Risk["Risk Service"]
+    Analytics --> Terminal["Trading Terminal"]
+    PnL --> Terminal
+    Risk --> Terminal
+```
+
+### Replay APIs
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| `POST` | `/replay/sessions` | Create replay session from CSV file path or multipart upload. |
+| `POST` | `/replay/sessions/{sessionId}/play` | Start or resume background replay. |
+| `POST` | `/replay/sessions/{sessionId}/pause` | Pause replay and preserve current index. |
+| `POST` | `/replay/sessions/{sessionId}/stop` | Stop replay and reset current index. |
+| `POST` | `/replay/sessions/{sessionId}/speed` | Change speed to `1x`, `2x`, `5x`, `10x`, or another positive multiplier. |
+| `GET` | `/replay/sessions/{sessionId}` | Return replay status. |
+| `GET` | `/replay/sessions` | Return all replay sessions. |
+
+### Replay Metrics
+
+| Metric | Meaning |
+| --- | --- |
+| `replay_sessions_started_total` | Replay sessions started or resumed. |
+| `replay_ticks_published_total` | Historical ticks published to Kafka. |
+| `replay_active_sessions` | Active replay worker count. |
+| `replay_publish_latency_ms_seconds_*` | Replay tick publish timer series. |
+
+### Run Replay Service
+
+```bash
+cd backend/replay-service
+mvn spring-boot:run
+```
+
+Sample session:
+
+```bash
+curl -X POST http://localhost:8087/replay/sessions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "filePath": "data/replay/sample-aapl-session.csv",
+    "speedMultiplier": 1
+  }'
+
+curl -X POST http://localhost:8087/replay/sessions/REPLAY-1/play
+curl -X POST http://localhost:8087/replay/sessions/REPLAY-1/pause
+curl -X POST http://localhost:8087/replay/sessions/REPLAY-1/speed \
+  -H "Content-Type: application/json" \
+  -d '{"speedMultiplier": 5}'
+curl -X POST http://localhost:8087/replay/sessions/REPLAY-1/stop
+curl http://localhost:8087/replay/sessions/REPLAY-1
+```
+
+The React Trading Terminal now includes a `Historical Replay` page for creating sessions, playing, pausing, stopping, changing speed, and watching progress.
+
+## Phase 15: Production Deployment
+
+Phase 15 Dockerizes the full MarketX system as a production-style distributed trading platform.
+
+The deployment includes:
+
+- Multi-stage Dockerfiles for all Spring Boot services.
+- A Vite React Trading Terminal image served by Nginx.
+- Root `docker-compose.yml` with OMS, Risk, Position, PnL, Market Data, Analytics, FIX Gateway, Replay, Kafka, Redis, PostgreSQL, Nginx, Prometheus, and Grafana.
+- Nginx API gateway routes under `/api`.
+- PostgreSQL database initialization for each service database.
+- Environment-variable based Docker configuration without hardcoded localhost service dependencies.
+- Docker `json-file` log rotation and Spring console log patterns with service names.
+- Prometheus scrape targets using Docker service names and Grafana dashboard provisioning.
+- GitHub Actions CI for Maven services, the React terminal, and Docker image builds.
+- Optional Docker Hub publish workflow gated by Docker Hub secrets.
+
+Run the full platform:
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+Open:
+
+```text
+Trading Terminal: http://localhost
+Grafana:          http://localhost:3000
+Prometheus:       http://localhost:9090
+OMS API:          http://localhost/api/orders
+```
+
+See [Deployment Guide](docs/deployment.md) for ports, environment variables, logs, gateway routes, and the end-to-end Docker test.
+
 ## Documentation
 
 - [How a Trade Happens](docs/phase-0/how-a-trade-happens.md)
@@ -1218,6 +1740,10 @@ Full Phase 8 notes are in [Phase 8 Kafka Event Bus](docs/phase-8-kafka-event-bus
 - [Trade Flow Diagram](docs/phase-0/diagrams/trade-flow.md)
 - [Order Book Example](docs/phase-0/diagrams/order-book-example.md)
 - [Phase 8 Kafka Event Bus](docs/phase-8-kafka-event-bus.md)
+- [Trading Terminal README](frontend/trading-terminal/README.md)
+- [Monitoring README](monitoring/README.md)
+- [Replay Service README](backend/replay-service/README.md)
+- [Deployment Guide](docs/deployment.md)
 
 ## Future Phases
 
@@ -1233,5 +1759,12 @@ Future phases may include:
 | Phase 6 | PnL Engine with realized, unrealized, and total PnL |
 | Phase 7 | Risk Engine with pre-trade checks and OMS risk gating |
 | Phase 8 | Kafka Event Bus with asynchronous order, risk, trade, and market price events |
+| Phase 9 | Market Data Feed with simulated live prices over Kafka |
+| Phase 10 | Analytics Service with VWAP, volume, spread, and trade count APIs |
+| Phase 11 | Simplified FIX Gateway for new orders, cancels, and execution reports |
+| Phase 12 | React Trading Terminal with order entry, market data, analytics, PnL, and FIX screens |
+| Phase 13 | Prometheus and Grafana monitoring for trading metrics, latency, errors, CPU, and memory |
+| Phase 14 | Historical Replay Engine for CSV-based market-session replay into Kafka |
+| Phase 15 | Production Docker Compose deployment with gateway, observability, logging, and CI/CD |
 
-MarketX currently contains Phase 0 documentation, the Phase 1 in-memory exchange simulator, the Phase 2 market depth order book engine, the Phase 3 matching engine, the Phase 4 OMS microservice, the Phase 5 Position Service, the Phase 6 PnL Engine, the Phase 7 Risk Engine, and the Phase 8 Kafka Event Bus.
+MarketX currently contains Phase 0 documentation, the Phase 1 in-memory exchange simulator, the Phase 2 market depth order book engine, the Phase 3 matching engine, the Phase 4 OMS microservice, the Phase 5 Position Service, the Phase 6 PnL Engine, the Phase 7 Risk Engine, the Phase 8 Kafka Event Bus, the Phase 9 Market Data Feed, the Phase 10 Analytics Service, the Phase 11 FIX Gateway, the Phase 12 React Trading Terminal, the Phase 13 Monitoring stack, the Phase 14 Historical Replay Engine, and the Phase 15 Production Deployment layer.

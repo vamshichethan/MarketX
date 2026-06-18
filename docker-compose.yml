@@ -1,18 +1,66 @@
+x-backend-env: &backend-env
+  SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-docker}
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
+  REDIS_HOST: ${REDIS_HOST:-redis}
+  REDIS_PORT: ${REDIS_PORT:-6379}
+
+x-db-env: &db-env
+  SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-marketx}
+  SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-marketx}
+
+x-json-logging: &json-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-spring-healthcheck: &spring-healthcheck
+  interval: 30s
+  timeout: 10s
+  retries: 5
+  start_period: 60s
+
 services:
   postgres:
     image: postgres:16
     container_name: marketx-postgres
     environment:
-      POSTGRES_USER: marketx
-      POSTGRES_PASSWORD: marketx
+      POSTGRES_USER: ${POSTGRES_USER:-marketx}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-marketx}
+      POSTGRES_DB: ${POSTGRES_DB:-marketx}
     ports:
       - "5432:5432"
     volumes:
-      - ./backend/oms-service/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-marketx}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - marketx-network
+    logging: *json-logging
+
+  redis:
+    image: redis:7-alpine
+    container_name: marketx-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - marketx-network
+    logging: *json-logging
 
   kafka:
     image: bitnami/kafka:3.7
-    container_name: marketx-kafka
+    container_name: kafka
     ports:
       - "9092:9092"
     environment:
@@ -20,25 +68,394 @@ services:
       KAFKA_CFG_PROCESS_ROLES: broker,controller
       KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
       KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_CFG_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
       ALLOW_PLAINTEXT_LISTENER: "yes"
+    volumes:
+      - kafka-data:/bitnami/kafka
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - marketx-network
+    logging: *json-logging
 
   kafka-init:
     image: bitnami/kafka:3.7
     container_name: marketx-kafka-init
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
     entrypoint: ["/bin/bash", "-c"]
     command: >
       "
-      sleep 10 &&
       kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic orders.submitted --partitions 1 --replication-factor 1 &&
       kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic orders.risk.approved --partitions 1 --replication-factor 1 &&
       kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic orders.risk.rejected --partitions 1 --replication-factor 1 &&
+      kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic orders.cancel.requested --partitions 1 --replication-factor 1 &&
+      kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic orders.cancelled --partitions 1 --replication-factor 1 &&
       kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic trades.executed --partitions 1 --replication-factor 1 &&
-      kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic market.prices --partitions 1 --replication-factor 1
+      kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic market-data --partitions 1 --replication-factor 1 &&
+      kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic market.prices --partitions 1 --replication-factor 1 &&
+      kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic fix.inbound --partitions 1 --replication-factor 1 &&
+      kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic fix.execution.reports --partitions 1 --replication-factor 1
       "
+    networks:
+      - marketx-network
+    logging: *json-logging
+
+  oms-service:
+    build:
+      context: ./backend
+      dockerfile: oms-service/Dockerfile
+    image: marketx/oms-service:latest
+    container_name: marketx-oms-service
+    environment:
+      <<: [*backend-env, *db-env]
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/marketx_oms
+      MARKETX_RISK_SERVICE_URL: http://risk-service:8083
+    expose:
+      - "8080"
+    volumes:
+      - ./docker/logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      risk-service:
+        condition: service_healthy
+    healthcheck:
+      <<: *spring-healthcheck
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+    networks:
+      - marketx-network
+    logging: *json-logging
+
+  risk-service:
+    build:
+      context: ./backend
+      dockerfile: risk-service/Dockerfile
+    image: marketx/risk-service:latest
+    container_name: marketx-risk-service
+    environment:
+      <<: [*backend-env, *db-env]
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/marketx_risk
+      MARKETX_POSITION_SERVICE_URL: http://position-service:8081
+      MARKETX_PNL_SERVICE_URL: http://pnl-service:8082
+    expose:
+      - "8083"
+    volumes:
+      - ./docker/logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      <<: *spring-healthcheck
+      test: ["CMD", "curl", "-f", "http://localhost:8083/actuator/health"]
+    networks:
+      - marketx-network
+    logging: *json-logging
+
+  position-service:
+    build:
+      context: ./backend
+      dockerfile: position-service/Dockerfile
+    image: marketx/position-service:latest
+    container_name: marketx-position-service
+    environment:
+      <<: [*backend-env, *db-env]
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/marketx_positions
+    expose:
+      - "8081"
+    volumes:
+      - ./docker/logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      <<: *spring-healthcheck
+      test: ["CMD", "curl", "-f", "http://localhost:8081/actuator/health"]
+    networks:
+      - marketx-network
+    logging: *json-logging
+
+  pnl-service:
+    build:
+      context: ./backend
+      dockerfile: pnl-service/Dockerfile
+    image: marketx/pnl-service:latest
+    container_name: marketx-pnl-service
+    environment:
+      <<: [*backend-env, *db-env]
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/marketx_pnl
+    expose:
+      - "8082"
+    volumes:
+      - ./docker/logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      <<: *spring-healthcheck
+      test: ["CMD", "curl", "-f", "http://localhost:8082/actuator/health"]
+    networks:
+      - marketx-network
+    logging: *json-logging
+
+  market-data-service:
+    build:
+      context: ./backend
+      dockerfile: market-data-service/Dockerfile
+    image: marketx/market-data-service:latest
+    container_name: marketx-market-data-service
+    environment:
+      <<: *backend-env
+    expose:
+      - "8084"
+    volumes:
+      - ./docker/logs:/app/logs
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      <<: *spring-healthcheck
+      test: ["CMD", "curl", "-f", "http://localhost:8084/actuator/health"]
+    networks:
+      - marketx-network
+    logging: *json-logging
+
+  analytics-service:
+    build:
+      context: ./backend
+      dockerfile: analytics-service/Dockerfile
+    image: marketx/analytics-service:latest
+    container_name: marketx-analytics-service
+    environment:
+      <<: [*backend-env, *db-env]
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/marketx_analytics
+    expose:
+      - "8085"
+    volumes:
+      - ./docker/logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      <<: *spring-healthcheck
+      test: ["CMD", "curl", "-f", "http://localhost:8085/actuator/health"]
+    networks:
+      - marketx-network
+    logging: *json-logging
+
+  fix-gateway-service:
+    build:
+      context: ./backend
+      dockerfile: fix-gateway-service/Dockerfile
+    image: marketx/fix-gateway-service:latest
+    container_name: marketx-fix-gateway-service
+    environment:
+      <<: [*backend-env, *db-env]
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/marketx_fix
+    expose:
+      - "8086"
+    volumes:
+      - ./docker/logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      <<: *spring-healthcheck
+      test: ["CMD", "curl", "-f", "http://localhost:8086/actuator/health"]
+    networks:
+      - marketx-network
+    logging: *json-logging
+
+  replay-service:
+    build:
+      context: ./backend
+      dockerfile: replay-service/Dockerfile
+    image: marketx/replay-service:latest
+    container_name: marketx-replay-service
+    environment:
+      <<: [*backend-env, *db-env]
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/marketx_replay
+    expose:
+      - "8087"
+    volumes:
+      - ./backend/replay-service/data:/app/data:ro
+      - ./docker/logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      <<: *spring-healthcheck
+      test: ["CMD", "curl", "-f", "http://localhost:8087/actuator/health"]
+    networks:
+      - marketx-network
+    logging: *json-logging
+
+  trading-terminal:
+    build:
+      context: ./frontend/trading-terminal
+      args:
+        VITE_OMS_API: /api
+        VITE_POSITION_API: /api
+        VITE_PNL_API: /api
+        VITE_RISK_API: /api
+        VITE_MARKET_DATA_API: /api
+        VITE_ANALYTICS_API: /api
+        VITE_FIX_API: /api
+        VITE_REPLAY_API: /api
+    image: marketx/trading-terminal:latest
+    container_name: marketx-trading-terminal
+    expose:
+      - "80"
+    depends_on:
+      oms-service:
+        condition: service_healthy
+      position-service:
+        condition: service_healthy
+      pnl-service:
+        condition: service_healthy
+      risk-service:
+        condition: service_healthy
+      market-data-service:
+        condition: service_healthy
+      analytics-service:
+        condition: service_healthy
+      fix-gateway-service:
+        condition: service_healthy
+      replay-service:
+        condition: service_healthy
+    networks:
+      - marketx-network
+    logging: *json-logging
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: marketx-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      trading-terminal:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    networks:
+      - marketx-network
+    logging: *json-logging
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: marketx-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      oms-service:
+        condition: service_healthy
+      risk-service:
+        condition: service_healthy
+      position-service:
+        condition: service_healthy
+      pnl-service:
+        condition: service_healthy
+      market-data-service:
+        condition: service_healthy
+      analytics-service:
+        condition: service_healthy
+      fix-gateway-service:
+        condition: service_healthy
+      replay-service:
+        condition: service_healthy
+    networks:
+      - marketx-network
+    logging: *json-logging
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: marketx-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-marketx}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+    depends_on:
+      - prometheus
+    networks:
+      - marketx-network
+    logging: *json-logging
+
+volumes:
+  postgres-data:
+  redis-data:
+  kafka-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  marketx-network:
+    name: marketx-network
+    driver: bridge

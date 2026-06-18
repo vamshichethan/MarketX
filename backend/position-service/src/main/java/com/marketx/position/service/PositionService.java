@@ -10,8 +10,12 @@ import com.marketx.position.enums.PositionType;
 import com.marketx.position.exception.DuplicateTradeException;
 import com.marketx.position.exception.InvalidTradeEventException;
 import com.marketx.position.exception.PositionNotFoundException;
+import com.marketx.position.metrics.PositionMetricsService;
 import com.marketx.position.repository.PositionRepository;
 import com.marketx.position.repository.ProcessedTradeRepository;
+import io.micrometer.core.instrument.Timer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,21 +26,26 @@ import java.util.List;
 
 @Service
 public class PositionService {
+    private static final Logger log = LoggerFactory.getLogger(PositionService.class);
     private static final int PRICE_SCALE = 6;
 
     private final PositionRepository positionRepository;
     private final ProcessedTradeRepository processedTradeRepository;
+    private final PositionMetricsService metricsService;
 
     public PositionService(
             PositionRepository positionRepository,
-            ProcessedTradeRepository processedTradeRepository
+            ProcessedTradeRepository processedTradeRepository,
+            PositionMetricsService metricsService
     ) {
         this.positionRepository = positionRepository;
         this.processedTradeRepository = processedTradeRepository;
+        this.metricsService = metricsService;
     }
 
     @Transactional
     public PositionUpdateResult processTrade(TradeEventRequest request) {
+        Timer.Sample sample = metricsService.startUpdate();
         validateTradeEvent(request);
 
         if (processedTradeRepository.existsByTradeId(request.tradeId())) {
@@ -53,6 +62,14 @@ public class PositionService {
         applyTrade(position, request);
         PositionEntity savedPosition = positionRepository.save(position);
         markTradeProcessed(request, accountId, symbol);
+        log.info("Position updated accountId={} symbol={} tradeId={} netQuantity={} averagePrice={} positionType={}",
+                accountId,
+                symbol,
+                request.tradeId(),
+                savedPosition.getNetQuantity(),
+                savedPosition.getAveragePrice(),
+                savedPosition.getPositionType());
+        metricsService.recordUpdate(sample);
         return new PositionUpdateResult(toResponse(savedPosition), created);
     }
 
