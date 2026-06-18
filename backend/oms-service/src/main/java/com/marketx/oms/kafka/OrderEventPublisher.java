@@ -1,6 +1,7 @@
 package com.marketx.oms.kafka;
 
 import com.marketx.common.events.KafkaTopics;
+import com.marketx.common.events.OrderCancelledEvent;
 import com.marketx.common.events.OrderSubmittedEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,5 +21,10 @@ public class OrderEventPublisher {
     public void publishOrderSubmitted(OrderSubmittedEvent event) {
         kafkaTemplate.send(KafkaTopics.ORDERS_SUBMITTED, event.orderId(), event);
         log.info("Published {} eventId={} orderId={}", KafkaTopics.ORDERS_SUBMITTED, event.eventId(), event.orderId());
+    }
+
+    public void publishOrderCancelled(OrderCancelledEvent event) {
+        kafkaTemplate.send(KafkaTopics.ORDERS_CANCELLED, event.orderId(), event);
+        log.info("Published {} eventId={} orderId={}", KafkaTopics.ORDERS_CANCELLED, event.eventId(), event.orderId());
     }
 }

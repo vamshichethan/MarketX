@@ -1,0 +1,65 @@
+server {
+  listen 80;
+  server_name _;
+
+  proxy_http_version 1.1;
+  proxy_set_header Host $host;
+  proxy_set_header X-Real-IP $remote_addr;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Forwarded-Proto $scheme;
+
+  location = /health {
+    add_header Content-Type text/plain;
+    return 200 "ok\n";
+  }
+
+  location ~ ^/api/(orders|order-book|trades)(/?.*)$ {
+    rewrite ^/api/(orders|order-book|trades)(/?.*)$ /$1$2 break;
+    proxy_pass http://${OMS_HOST}:8080;
+  }
+
+  location ~ ^/api/positions(/?.*)$ {
+    rewrite ^/api/positions(/?.*)$ /positions$1 break;
+    proxy_pass http://${POSITION_HOST}:8081;
+  }
+
+  location ~ ^/api/pnl(/?.*)$ {
+    rewrite ^/api/pnl(/?.*)$ /pnl$1 break;
+    proxy_pass http://${PNL_HOST}:8082;
+  }
+
+  location ~ ^/api/market-prices(/?.*)$ {
+    rewrite ^/api/market-prices(/?.*)$ /market-prices$1 break;
+    proxy_pass http://${PNL_HOST}:8082;
+  }
+
+  location ~ ^/api/risk(/?.*)$ {
+    rewrite ^/api/risk(/?.*)$ /risk$1 break;
+    proxy_pass http://${RISK_HOST}:8083;
+  }
+
+  location ~ ^/api/market-data(/?.*)$ {
+    rewrite ^/api/market-data(/?.*)$ /market-data$1 break;
+    proxy_pass http://${MARKET_DATA_HOST}:8084;
+  }
+
+  location ~ ^/api/analytics(/?.*)$ {
+    rewrite ^/api/analytics(/?.*)$ /analytics$1 break;
+    proxy_pass http://${ANALYTICS_HOST}:8085;
+  }
+
+  location ~ ^/api/fix(/?.*)$ {
+    rewrite ^/api/fix(/?.*)$ /fix$1 break;
+    proxy_pass http://${FIX_HOST}:8086;
+  }
+
+  location ~ ^/api/replay(/?.*)$ {
+    rewrite ^/api/replay(/?.*)$ /replay$1 break;
+    proxy_pass http://${REPLAY_HOST}:8087;
+  }
+
+  location / {
+    add_header Content-Type text/plain;
+    return 200 "MarketX API gateway\n";
+  }
+}

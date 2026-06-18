@@ -1,0 +1,44 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'oms-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['oms-service:8080']
+
+  - job_name: 'risk-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['risk-service:8083']
+
+  - job_name: 'position-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['position-service:8081']
+
+  - job_name: 'pnl-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['pnl-service:8082']
+
+  - job_name: 'market-data-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['market-data-service:8084']
+
+  - job_name: 'analytics-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['analytics-service:8085']
+
+  - job_name: 'fix-gateway-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['fix-gateway-service:8086']
+
+  - job_name: 'replay-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['replay-service:8087']

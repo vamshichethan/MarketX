@@ -12,9 +12,13 @@ import com.marketx.pnl.enums.PositionType;
 import com.marketx.pnl.exception.DuplicateTradeException;
 import com.marketx.pnl.exception.InvalidTradeEventException;
 import com.marketx.pnl.exception.PnlNotFoundException;
+import com.marketx.pnl.metrics.PnlMetricsService;
 import com.marketx.pnl.repository.MarketPriceRepository;
 import com.marketx.pnl.repository.PnlRepository;
 import com.marketx.pnl.repository.ProcessedTradeRepository;
+import io.micrometer.core.instrument.Timer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,24 +29,29 @@ import java.util.List;
 
 @Service
 public class PnlService {
+    private static final Logger log = LoggerFactory.getLogger(PnlService.class);
     private static final int PRICE_SCALE = 6;
 
     private final PnlRepository pnlRepository;
     private final MarketPriceRepository marketPriceRepository;
     private final ProcessedTradeRepository processedTradeRepository;
+    private final PnlMetricsService metricsService;
 
     public PnlService(
             PnlRepository pnlRepository,
             MarketPriceRepository marketPriceRepository,
-            ProcessedTradeRepository processedTradeRepository
+            ProcessedTradeRepository processedTradeRepository,
+            PnlMetricsService metricsService
     ) {
         this.pnlRepository = pnlRepository;
         this.marketPriceRepository = marketPriceRepository;
         this.processedTradeRepository = processedTradeRepository;
+        this.metricsService = metricsService;
     }
 
     @Transactional
     public PnlUpdateResult processTrade(TradeEventRequest request) {
+        Timer.Sample sample = metricsService.startCalculation();
         validateTradeEvent(request);
 
         if (processedTradeRepository.existsByTradeId(request.tradeId())) {
@@ -64,11 +73,20 @@ public class PnlService {
 
         PnlEntity savedPnl = pnlRepository.save(pnl);
         markTradeProcessed(request, accountId, symbol);
+        log.info("PnL updated accountId={} symbol={} tradeId={} realizedPnl={} unrealizedPnl={} totalPnl={}",
+                accountId,
+                symbol,
+                request.tradeId(),
+                savedPnl.getRealizedPnl(),
+                savedPnl.getUnrealizedPnl(),
+                savedPnl.getTotalPnl());
+        metricsService.recordUpdate(sample);
         return new PnlUpdateResult(toResponse(savedPnl), created);
     }
 
     @Transactional
     public List<PnlResponse> updateMarketPrice(MarketPriceUpdateRequest request) {
+        Timer.Sample sample = metricsService.startCalculation();
         validateMarketPrice(request);
         String symbol = request.symbol().toUpperCase();
 
@@ -86,9 +104,16 @@ public class PnlService {
             pnl.setUpdatedAt(LocalDateTime.now());
         }
 
-        return pnlRepository.saveAll(rows).stream()
+        List<PnlResponse> responses = pnlRepository.saveAll(rows).stream()
                 .map(this::toResponse)
                 .toList();
+        log.info("PnL market price updated symbol={} price={} impactedRows={}", symbol, request.price(), responses.size());
+        if (responses.isEmpty()) {
+            metricsService.recordCalculationLatency(sample);
+        } else {
+            metricsService.recordUpdates(sample, responses.size());
+        }
+        return responses;
     }
 
     public PnlResponse getPnl(String accountId, String symbol) {

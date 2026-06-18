@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Layout from './components/Layout';
 import AnalyticsPage from './pages/AnalyticsPage';
 import DashboardPage from './pages/DashboardPage';
@@ -8,6 +8,7 @@ import OrderBookPage from './pages/OrderBookPage';
 import OrderEntryPage from './pages/OrderEntryPage';
 import PnlPage from './pages/PnlPage';
 import PositionsPage from './pages/PositionsPage';
+import ReplayPage from './pages/ReplayPage';
 
 const pageTitles = {
   dashboard: 'Dashboard',
@@ -17,22 +18,29 @@ const pageTitles = {
   pnl: 'PnL',
   'market-data': 'Market Data',
   analytics: 'Analytics',
-  fix: 'FIX Gateway'
+  fix: 'FIX Gateway',
+  replay: 'Historical Replay'
 };
 
 export default function App() {
   const [activePage, setActivePage] = useState('dashboard');
   const [symbol, setSymbol] = useState('AAPL');
+  const [clock, setClock] = useState(new Date());
+
+  useEffect(() => {
+    const id = setInterval(() => setClock(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   return (
     <Layout activePage={activePage} onNavigate={setActivePage} symbol={symbol} onSymbolChange={setSymbol}>
       <div className="mb-4 flex items-center justify-between border-b border-slate-800 pb-3">
         <div>
           <h1 className="text-xl font-semibold text-slate-100">{pageTitles[activePage]}</h1>
-          <div className="text-xs uppercase text-slate-500">MarketX / LOCAL / {symbol}</div>
+          <div className="text-xs uppercase text-slate-500">MarketX / SIM+API / {symbol}</div>
         </div>
         <div className="rounded border border-slate-800 bg-slate-900 px-3 py-2 font-mono text-xs text-amber-300">
-          {new Date().toLocaleTimeString()}
+          {clock.toLocaleTimeString()}
         </div>
       </div>
       {activePage === 'dashboard' && <DashboardPage />}
@@ -43,6 +51,7 @@ export default function App() {
       {activePage === 'market-data' && <MarketDataPage />}
       {activePage === 'analytics' && <AnalyticsPage />}
       {activePage === 'fix' && <FixGatewayPage />}
+      {activePage === 'replay' && <ReplayPage />}
     </Layout>
   );
 }

@@ -5,7 +5,10 @@ import com.marketx.oms.dto.TradeResponse;
 import com.marketx.oms.entity.TradeEntity;
 import com.marketx.oms.exchange.ExchangeClient;
 import com.marketx.oms.kafka.TradeEventPublisher;
+import com.marketx.oms.metrics.OmsMetricsService;
 import com.marketx.oms.repository.TradeRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.UUID;
@@ -13,32 +16,56 @@ import java.util.List;
 
 @Service
 public class TradeService {
+    private static final Logger log = LoggerFactory.getLogger(TradeService.class);
+
     private final TradeRepository tradeRepository;
     private final ExchangeClient exchangeClient;
     private final TradeEventPublisher tradeEventPublisher;
+    private final OmsMetricsService metricsService;
 
     public TradeService(
             TradeRepository tradeRepository,
             ExchangeClient exchangeClient,
-            TradeEventPublisher tradeEventPublisher
+            TradeEventPublisher tradeEventPublisher,
+            OmsMetricsService metricsService
     ) {
         this.tradeRepository = tradeRepository;
         this.exchangeClient = exchangeClient;
         this.tradeEventPublisher = tradeEventPublisher;
+        this.metricsService = metricsService;
     }
 
     public void syncTradesFromExchange() {
         for (TradeResponse trade : exchangeClient.getTrades(null)) {
             tradeRepository.findByTradeId(trade.tradeId()).orElseGet(() -> {
-                TradeEntity savedTrade = tradeRepository.save(toEntity(trade));
-                tradeEventPublisher.publishTradeExecuted(toTradeExecutedEvent(trade));
-                return savedTrade;
-            });
+            TradeEntity savedTrade = tradeRepository.save(toEntity(trade));
+            tradeEventPublisher.publishTradeExecuted(toTradeExecutedEvent(trade));
+            log.info("Trade executed tradeId={} symbol={} quantity={} price={} buyOrderId={} sellOrderId={}",
+                    trade.tradeId(),
+                    trade.symbol(),
+                    trade.quantity(),
+                    trade.price(),
+                    trade.buyOrderId(),
+                    trade.sellOrderId());
+            metricsService.recordOrdersFilled(2);
+            return savedTrade;
+        });
         }
     }
 
     public void storeTradeEvent(TradeExecutedEvent event) {
-        tradeRepository.findByTradeId(event.tradeId()).orElseGet(() -> tradeRepository.save(toEntity(event)));
+        tradeRepository.findByTradeId(event.tradeId()).orElseGet(() -> {
+            TradeEntity savedTrade = tradeRepository.save(toEntity(event));
+            log.info("Trade executed tradeId={} symbol={} quantity={} price={} buyOrderId={} sellOrderId={}",
+                    event.tradeId(),
+                    event.symbol(),
+                    event.quantity(),
+                    event.price(),
+                    event.buyOrderId(),
+                    event.sellOrderId());
+            metricsService.recordOrdersFilled(2);
+            return savedTrade;
+        });
     }
 
     public List<TradeResponse> getTrades(String symbol) {

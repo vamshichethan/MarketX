@@ -15,8 +15,12 @@ import com.marketx.risk.enums.OrderSide;
 import com.marketx.risk.enums.OrderType;
 import com.marketx.risk.enums.RiskDecision;
 import com.marketx.risk.exception.InvalidRiskRequestException;
+import com.marketx.risk.metrics.RiskMetricsService;
 import com.marketx.risk.repository.MarketPriceRepository;
 import com.marketx.risk.repository.RiskDecisionRepository;
+import io.micrometer.core.instrument.Timer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,6 +33,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 @Service
 public class RiskService {
+    private static final Logger log = LoggerFactory.getLogger(RiskService.class);
     private static final String REASON_SEPARATOR = "; ";
 
     private final AtomicLong nextDecisionSequence = new AtomicLong(1);
@@ -37,45 +42,62 @@ public class RiskService {
     private final MarketPriceRepository marketPriceRepository;
     private final PositionClient positionClient;
     private final PnlClient pnlClient;
+    private final RiskMetricsService metricsService;
 
     public RiskService(
             RiskLimitService riskLimitService,
             RiskDecisionRepository riskDecisionRepository,
             MarketPriceRepository marketPriceRepository,
             PositionClient positionClient,
-            PnlClient pnlClient
+            PnlClient pnlClient,
+            RiskMetricsService metricsService
     ) {
         this.riskLimitService = riskLimitService;
         this.riskDecisionRepository = riskDecisionRepository;
         this.marketPriceRepository = marketPriceRepository;
         this.positionClient = positionClient;
         this.pnlClient = pnlClient;
+        this.metricsService = metricsService;
     }
 
     @Transactional
     public RiskEvaluationResponse evaluate(EvaluateRiskRequest request) {
-        validateEvaluateRequest(request);
+        Timer.Sample sample = metricsService.startRiskCheck();
+        try {
+            validateEvaluateRequest(request);
 
-        String accountId = request.accountId().toUpperCase();
-        String symbol = request.symbol().toUpperCase();
-        RiskLimitEntity limits = riskLimitService.getOrCreateDefaults(accountId);
-        List<String> reasons = new java.util.ArrayList<>();
+            String accountId = request.accountId().toUpperCase();
+            String symbol = request.symbol().toUpperCase();
+            RiskLimitEntity limits = riskLimitService.getOrCreateDefaults(accountId);
+            List<String> reasons = new java.util.ArrayList<>();
 
-        checkMaxOrderQuantity(request, limits, reasons);
-        checkPositionLimit(request, accountId, symbol, limits, reasons);
-        checkExposure(request, symbol, limits, reasons);
-        checkDailyLoss(accountId, limits, reasons);
+            checkMaxOrderQuantity(request, limits, reasons);
+            checkPositionLimit(request, accountId, symbol, limits, reasons);
+            checkExposure(request, symbol, limits, reasons);
+            checkDailyLoss(accountId, limits, reasons);
 
-        RiskDecision decision = reasons.isEmpty() ? RiskDecision.APPROVED : RiskDecision.REJECTED;
-        RiskEvaluationResponse response = new RiskEvaluationResponse(
-                decision == RiskDecision.APPROVED,
-                decision,
-                reasons,
-                accountId,
-                symbol
-        );
-        saveDecision(request, response);
-        return response;
+            RiskDecision decision = reasons.isEmpty() ? RiskDecision.APPROVED : RiskDecision.REJECTED;
+            RiskEvaluationResponse response = new RiskEvaluationResponse(
+                    decision == RiskDecision.APPROVED,
+                    decision,
+                    reasons,
+                    accountId,
+                    symbol
+            );
+            saveDecision(request, response);
+            log.info("Risk decision accountId={} symbol={} side={} quantity={} decision={} reasons={}",
+                    accountId,
+                    symbol,
+                    request.side(),
+                    request.quantity(),
+                    response.decision(),
+                    response.reasons());
+            metricsService.recordRiskCheck(sample, response.approved());
+            return response;
+        } catch (RuntimeException exception) {
+            metricsService.recordRiskCheck(sample, false);
+            throw exception;
+        }
     }
 
     @Transactional

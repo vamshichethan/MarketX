@@ -1,22 +1,25 @@
 import { useEffect, useState } from 'react';
-import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { analyticsApi } from '../api/analyticsApi';
 import { errorMessage } from '../api/http';
 import DataTable from '../components/DataTable';
+import { mockAnalyticsRows } from '../mockMarket';
 import { integer, money, normalizeRows } from '../utils';
 
 export default function AnalyticsPage() {
-  const [rows, setRows] = useState([]);
+  const [rows, setRows] = useState(() => mockAnalyticsRows());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   async function fetchAnalytics() {
     try {
       const response = await analyticsApi.getDashboard();
-      setRows(normalizeRows(response?.symbols || response));
+      const nextRows = normalizeRows(response?.symbols || response);
+      setRows(nextRows.length ? nextRows : mockAnalyticsRows());
       setError('');
     } catch (err) {
-      setError(errorMessage(err, 'Analytics API unavailable'));
+      setRows(mockAnalyticsRows());
+      setError(`${errorMessage(err, 'Analytics API unavailable')} - showing simulated analytics`);
     } finally {
       setLoading(false);
     }
@@ -25,8 +28,14 @@ export default function AnalyticsPage() {
   useEffect(() => {
     fetchAnalytics();
     const id = setInterval(fetchAnalytics, 3000);
-    return () => clearInterval(id);
+    const tickId = setInterval(() => setRows(mockAnalyticsRows()), 1000);
+    return () => {
+      clearInterval(id);
+      clearInterval(tickId);
+    };
   }, []);
+
+  const priceRows = rows.filter((row) => row.latestPrice !== null && row.latestPrice !== undefined);
 
   const columns = [
     { key: 'symbol', label: 'Symbol' },
@@ -39,7 +48,8 @@ export default function AnalyticsPage() {
   return (
     <div className="space-y-4">
       <h2 className="text-sm font-semibold uppercase text-slate-300">Analytics Dashboard</h2>
-      <DataTable columns={columns} rows={rows} loading={loading} error={error} />
+      {error && <div className="rounded border border-amber-900 bg-amber-950/20 p-3 text-xs text-amber-200">{error}</div>}
+      <DataTable columns={columns} rows={rows} loading={loading} />
       <div className="grid gap-4 xl:grid-cols-2">
         <ChartPanel title="Volume by Symbol">
           <BarChart data={rows}>
@@ -62,6 +72,18 @@ export default function AnalyticsPage() {
           </BarChart>
         </ChartPanel>
       </div>
+      {!!priceRows.length && (
+        <ChartPanel title="Latest Price by Symbol">
+          <LineChart data={priceRows}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+            <XAxis dataKey="symbol" stroke="#94a3b8" />
+            <YAxis stroke="#94a3b8" domain={['auto', 'auto']} />
+            <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155' }} />
+            <Legend />
+            <Line type="monotone" dataKey="latestPrice" stroke="#f59e0b" strokeWidth={2} dot={{ r: 4 }} />
+          </LineChart>
+        </ChartPanel>
+      )}
     </div>
   );
 }
