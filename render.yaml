@@ -43,7 +43,7 @@ services:
     region: singapore
     plan: starter
     image:
-      url: docker.io/bitnami/kafka:3.7
+      url: bitnami/kafka:3.7
     disk:
       name: kafka-data
       mountPath: /bitnami/kafka
@@ -248,12 +248,6 @@ envVarGroups:
       - key: SPRING_KAFKA_BOOTSTRAP_SERVERS
         value: marketx-kafka:9092
       - key: REDIS_HOST
-        fromService:
-          name: marketx-redis
-          type: keyvalue
-          property: host
+        value: marketx-redis
       - key: REDIS_PORT
-        fromService:
-          name: marketx-redis
-          type: keyvalue
-          property: port
+        value: 6379
